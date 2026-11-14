@@ -297,6 +297,23 @@ db.exec(`
   );
 `);
 
+function ensureColumn(table: string, column: string, definition: string) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+ensureColumn('conversation_members', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('conversation_members', 'marked_unread', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('conversation_members', 'disappearing_seconds', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('conversation_members', 'chat_theme', 'TEXT');
+ensureColumn('conversation_members', 'custom_list', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('conversation_members', 'cleared_at', 'TEXT');
+ensureColumn('groups', 'invite_code', 'TEXT');
+ensureColumn('messages', 'expires_at', 'TEXT');
+ensureColumn('statuses', 'privacy', "TEXT NOT NULL DEFAULT 'friends'");
+
 export const DEFAULT_PRIVACY = {
   lastSeen: 'friends',
   onlineStatus: 'everyone',

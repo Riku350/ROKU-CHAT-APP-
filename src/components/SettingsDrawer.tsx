@@ -514,7 +514,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   >
                     {item.options.map((o) => (
                       <option key={o} value={o}>
-                        {o}
+                        {o === 'friends' ? 'My contacts (Friends)' : o}
                       </option>
                     ))}
                   </select>

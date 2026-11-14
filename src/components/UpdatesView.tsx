@@ -1,5 +1,17 @@
-import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Eye, ImagePlus, Plus, Send, Trash2, VolumeX, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  ImagePlus,
+  Lock,
+  Plus,
+  Send,
+  Trash2,
+  VolumeX,
+  X,
+} from 'lucide-react';
 import { apiFetch, uploadMediaFile } from '../services/api';
 import type { StatusItem, UserProfile } from '../types/rikzen';
 
@@ -10,6 +22,7 @@ interface UpdatesViewProps {
 
 const STATUS_COLORS = ['#141418', '#1F1A0E', '#0D2619', '#23121E', '#111B2B'];
 const QUICK_PRESETS = ['Available ✅', 'Busy right now 🔕', 'At Work 💼', "Let's Chat ✨"];
+const COMPOSER_EMOJIS = ['😀', '🔥', '❤️', '✨', '🎉', '🙌', '💯', '😎'];
 
 function formatStatusErr(err: any): string {
   const raw = err?.message || 'Something went wrong. Please try again.';
@@ -36,24 +49,31 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
   const [textContent, setTextContent] = useState('');
   const [caption, setCaption] = useState('');
   const [bgColor, setBgColor] = useState(STATUS_COLORS[0]);
+  const [privacy, setPrivacy] = useState<'friends' | 'everyone'>('friends');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
-  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  // Segmented story viewer state (author's list + index + live bar progress)
+  const [viewerQueue, setViewerQueue] = useState<StatusItem[]>([]);
+  const [viewerPos, setViewerPos] = useState<number>(0);
+  const [progressPct, setProgressPct] = useState<number>(0);
   const [replyText, setReplyText] = useState('');
   const [showViewersList, setShowViewersList] = useState(false);
 
+  const activeStatus = viewerQueue[viewerPos] || null;
+
   const clearPreview = () => {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setSelectedFile(null);
+    setUploadProgress(0);
   };
 
   const openComposer = () => {
     setComposerErr(null);
+    setUploadProgress(0);
     setComposerOpen(true);
   };
 
@@ -86,9 +106,94 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     window.setTimeout(() => setSuccessMsg(null), 3000);
   };
 
-  const myStatuses = statuses.filter((s) => s.userId === me.id);
-  const friendStatuses = statuses.filter((s) => s.userId !== me.id && !s.isMuted);
-  const mutedStatuses = statuses.filter((s) => s.userId !== me.id && s.isMuted);
+  const myStatuses = useMemo(() => statuses.filter((s) => s.userId === me.id), [statuses, me.id]);
+  const recentStatuses = useMemo(
+    () => statuses.filter((s) => s.userId !== me.id && !s.isMuted && !s.viewedByMe),
+    [statuses, me.id]
+  );
+  const viewedStatuses = useMemo(
+    () => statuses.filter((s) => s.userId !== me.id && !s.isMuted && s.viewedByMe),
+    [statuses, me.id]
+  );
+  const mutedStatuses = useMemo(
+    () => statuses.filter((s) => s.userId !== me.id && s.isMuted),
+    [statuses, me.id]
+  );
+
+  // Sync viewer queue if statuses reload (e.g. view count/reaction updated)
+  useEffect(() => {
+    if (!activeStatus) return;
+    setViewerQueue((prev) =>
+      prev.map((item) => statuses.find((s) => s.id === item.id) || item)
+    );
+  }, [statuses]);
+
+  const markStatusViewed = (status: StatusItem) => {
+    if (status.userId !== me.id) {
+      apiFetch(`/api/statuses/${status.id}/view`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+        .then(() => loadStatuses())
+        .catch(() => {});
+    }
+  };
+
+  const openViewer = (status: StatusItem) => {
+    const authorQueue = statuses
+      .filter((s) => s.userId === status.userId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const idx = Math.max(0, authorQueue.findIndex((s) => s.id === status.id));
+    setViewerQueue(authorQueue.length > 0 ? authorQueue : [status]);
+    setViewerPos(idx);
+    setProgressPct(0);
+    setShowViewersList(false);
+    markStatusViewed(status);
+  };
+
+  const closeViewer = () => {
+    setViewerQueue([]);
+    setViewerPos(0);
+    setProgressPct(0);
+    setShowViewersList(false);
+  };
+
+  const goNextStory = () => {
+    if (viewerPos + 1 < viewerQueue.length) {
+      const next = viewerQueue[viewerPos + 1];
+      setViewerPos(viewerPos + 1);
+      setProgressPct(0);
+      setShowViewersList(false);
+      markStatusViewed(next);
+    } else {
+      closeViewer();
+    }
+  };
+
+  const goPrevStory = () => {
+    if (viewerPos > 0) {
+      setViewerPos(viewerPos - 1);
+      setProgressPct(0);
+      setShowViewersList(false);
+    }
+  };
+
+  // Auto-advance segmented progress bar for text / image statuses
+  useEffect(() => {
+    if (!activeStatus || showViewersList || activeStatus.mediaType === 'video') return;
+    setProgressPct(0);
+    const start = Date.now();
+    const duration = 6000;
+    const timer = window.setInterval(() => {
+      const pct = Math.min(100, ((Date.now() - start) / duration) * 100);
+      setProgressPct(pct);
+      if (pct >= 100) {
+        window.clearInterval(timer);
+        goNextStory();
+      }
+    }, 60);
+    return () => window.clearInterval(timer);
+  }, [activeStatus?.id, viewerPos, showViewersList]);
 
   const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -118,7 +223,9 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     try {
       let mediaUrl: string | null = null;
       if (selectedFile) {
-        const up = await uploadMediaFile(selectedFile, selectedFile.name);
+        const up = await uploadMediaFile(selectedFile, selectedFile.name, (pct) => {
+          setUploadProgress(pct);
+        });
         mediaUrl = up.fileUrl;
       }
       await apiFetch('/api/statuses', {
@@ -129,6 +236,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
           mediaUrl,
           caption: caption.trim(),
           backgroundColor: bgColor,
+          privacy,
         }),
       });
       setTextContent('');
@@ -142,22 +250,6 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
       setSubmitting(false);
     }
   };
-
-  const openViewer = async (status: StatusItem) => {
-    const idx = statuses.findIndex((s) => s.id === status.id);
-    if (idx === -1) return;
-    setViewerIndex(idx);
-    setShowViewersList(false);
-    if (status.userId !== me.id) {
-      await apiFetch(`/api/statuses/${status.id}/view`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      }).catch(() => {});
-      loadStatuses();
-    }
-  };
-
-  const activeStatus = viewerIndex !== null ? statuses[viewerIndex] : null;
 
   const reactToStatus = async (emoji: string) => {
     if (!activeStatus) return;
@@ -182,7 +274,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
         `Replied to your status: "${replyText.trim()}"`
       );
       setReplyText('');
-      setViewerIndex(null);
+      closeViewer();
     } catch (err: any) {
       setErrorMsg(formatStatusErr(err));
     }
@@ -191,7 +283,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
   const muteStatus = async (id: string) => {
     try {
       await apiFetch(`/api/statuses/${id}/mute`, { method: 'POST' });
-      setViewerIndex(null);
+      closeViewer();
       await loadStatuses();
     } catch (err: any) {
       setErrorMsg(formatStatusErr(err));
@@ -201,7 +293,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
   const deleteStatus = async (id: string) => {
     try {
       await apiFetch(`/api/statuses/${id}`, { method: 'DELETE' });
-      setViewerIndex(null);
+      closeViewer();
       await loadStatuses();
       showToast('Status deleted.');
     } catch (err: any) {
@@ -213,6 +305,47 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     const diff = new Date(expiresAt).getTime() - Date.now();
     return Math.max(1, Math.ceil(diff / (1000 * 60 * 60)));
   };
+
+  const renderStatusRow = (st: StatusItem, viewedRing: boolean) => (
+    <button
+      key={st.id}
+      type="button"
+      onClick={() => openViewer(st)}
+      className="flex w-full items-center justify-between p-3.5 text-left transition hover:bg-black/3 dark:hover:bg-white/5"
+    >
+      <div className="flex items-center gap-3.5 min-w-0">
+        <div
+          className={`h-13 w-13 shrink-0 rounded-full p-[2px] border-2 ${
+            viewedRing ? 'border-slate-500/40' : 'border-[#22C55E]'
+          }`}
+        >
+          <div className="h-full w-full overflow-hidden rounded-full bg-[#09090B]">
+            {st.authorAvatar ? (
+              <img
+                src={st.authorAvatar}
+                alt={st.authorName}
+                referrerPolicy="no-referrer"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center font-bold text-[#D4AF37]">
+                {st.authorName.charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-sm">{st.authorName}</p>
+          <p className="truncate text-xs text-slate-500 dark:text-[#9898A6]">
+            {st.mediaType === 'text'
+              ? st.content.slice(0, 48)
+              : st.caption || `${st.mediaType} update`}{' '}
+            · {hoursLeft(st.expiresAt)}h left
+          </p>
+        </div>
+      </div>
+    </button>
+  );
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-white dark:bg-[#0B0B0E] p-4 sm:p-6">
@@ -332,7 +465,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                       {st.mediaType === 'text' ? st.content : st.caption || `${st.mediaType} update`}
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-[#9898A6]">
-                      {hoursLeft(st.expiresAt)}h left · {st.viewCount} views
+                      {hoursLeft(st.expiresAt)}h left · {st.viewCount} views · {st.privacy === 'everyone' ? 'Everyone' : 'Friends'}
                     </p>
                   </button>
                   <button
@@ -350,63 +483,37 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
           )}
         </div>
 
-        {/* Friends' Statuses */}
+        {/* Recent Updates */}
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9898A6] mb-3">
             Recent Updates
           </h3>
           {loading ? (
             <p className="text-sm text-slate-500">Loading updates...</p>
-          ) : friendStatuses.length === 0 ? (
+          ) : recentStatuses.length === 0 ? (
             <div className="rounded-2xl border border-black/8 dark:border-white/10 p-6 text-center text-sm text-slate-500 dark:text-[#9898A6]">
-              No recent updates from friends yet. Add your own status above!
+              No unread updates from friends right now.
             </div>
           ) : (
             <div className="divide-y divide-black/6 dark:divide-white/8 rounded-2xl border border-black/8 dark:border-white/10 bg-white dark:bg-[#141418]">
-              {friendStatuses.map((st) => (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => openViewer(st)}
-                  className="flex w-full items-center justify-between p-3.5 text-left transition hover:bg-black/3 dark:hover:bg-white/5"
-                >
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div
-                      className={`h-13 w-13 shrink-0 rounded-full p-[2px] border-2 ${
-                        st.viewedByMe ? 'border-slate-500/40' : 'border-[#22C55E]'
-                      }`}
-                    >
-                      <div className="h-full w-full overflow-hidden rounded-full bg-[#09090B]">
-                        {st.authorAvatar ? (
-                          <img
-                            src={st.authorAvatar}
-                            alt={st.authorName}
-                            referrerPolicy="no-referrer"
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center font-bold text-[#D4AF37]">
-                            {st.authorName.charAt(0).toUpperCase()}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-sm">{st.authorName}</p>
-                      <p className="truncate text-xs text-slate-500 dark:text-[#9898A6]">
-                        {st.mediaType === 'text'
-                          ? st.content.slice(0, 48)
-                          : st.caption || `${st.mediaType} update`}{' '}
-                        · {hoursLeft(st.expiresAt)}h left
-                      </p>
-                    </div>
-                  </div>
-                </button>
-              ))}
+              {recentStatuses.map((st) => renderStatusRow(st, false))}
             </div>
           )}
         </div>
 
+        {/* Viewed Updates */}
+        {viewedStatuses.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9898A6] mb-3">
+              Viewed Updates ({viewedStatuses.length})
+            </h3>
+            <div className="divide-y divide-black/6 dark:divide-white/8 rounded-2xl border border-black/8 dark:border-white/10 bg-white/70 dark:bg-[#141418]/70 opacity-85">
+              {viewedStatuses.map((st) => renderStatusRow(st, true))}
+            </div>
+          </div>
+        )}
+
+        {/* Muted Updates */}
         {mutedStatuses.length > 0 && (
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9898A6] mb-2">
@@ -414,15 +521,21 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             </h3>
             <div className="space-y-2 opacity-65">
               {mutedStatuses.map((st) => (
-                <button
+                <div
                   key={st.id}
-                  type="button"
-                  onClick={() => openViewer(st)}
-                  className="flex w-full items-center justify-between rounded-xl border border-black/10 dark:border-white/10 p-3 text-left text-xs"
+                  className="flex w-full items-center justify-between rounded-xl border border-black/10 dark:border-white/10 p-3 text-xs"
                 >
-                  <span>{st.authorName}</span>
-                  <span>View</span>
-                </button>
+                  <button type="button" onClick={() => openViewer(st)} className="font-medium hover:underline">
+                    {st.authorName}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => muteStatus(st.id)}
+                    className="text-[#D4AF37] hover:underline"
+                  >
+                    Unmute
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -483,7 +596,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             {mediaType === 'text' ? (
               <div className="mt-4 space-y-3">
                 <div
-                  className="flex min-h-[160px] items-center justify-center rounded-2xl p-5"
+                  className="flex min-h-[150px] items-center justify-center rounded-2xl p-5"
                   style={{ backgroundColor: bgColor }}
                 >
                   <textarea
@@ -495,7 +608,21 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   />
                 </div>
 
-                {/* Easy 1-tap presets */}
+                {/* Quick Emoji Bar */}
+                <div className="flex justify-center gap-1.5">
+                  {COMPOSER_EMOJIS.map((em) => (
+                    <button
+                      key={em}
+                      type="button"
+                      onClick={() => setTextContent((t) => `${t}${em}`)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-base hover:bg-white/15"
+                    >
+                      {em}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Quick Presets */}
                 <div className="grid grid-cols-2 gap-1.5">
                   {QUICK_PRESETS.map((preset) => (
                     <button
@@ -556,10 +683,37 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               </div>
             )}
 
+            {/* Status Privacy Selector */}
+            <div className="mt-4 flex items-center justify-between rounded-xl border border-white/10 bg-[#09090B] px-3.5 py-2.5 text-xs">
+              <span className="flex items-center gap-1.5 text-[#9898A6]">
+                <Lock size={13} className="text-[#D4AF37]" /> Status Privacy
+              </span>
+              <select
+                value={privacy}
+                onChange={(e) => setPrivacy(e.target.value as 'friends' | 'everyone')}
+                className="rounded-lg bg-[#141418] px-2.5 py-1 text-xs text-white focus:outline-none"
+              >
+                <option value="friends">My Friends Only</option>
+                <option value="everyone">Everyone on RIKZEN</option>
+              </select>
+            </div>
+
+            {submitting && uploadProgress > 0 && uploadProgress < 100 && (
+              <div className="mt-3">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full bg-[#D4AF37] transition-all"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-right text-[11px] text-[#9898A6]">Uploading {uploadProgress}%</p>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={submitting}
-              className="mt-5 min-h-[46px] w-full rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] disabled:opacity-50"
+              className="mt-4 min-h-[46px] w-full rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] disabled:opacity-50"
             >
               {submitting ? 'Sharing...' : 'Share Status (24h)'}
             </button>
@@ -567,9 +721,24 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
         </div>
       )}
 
-      {/* Fullscreen Status Viewer */}
+      {/* Fullscreen Segmented Status Viewer */}
       {activeStatus && (
         <div className="fixed inset-0 z-50 flex flex-col bg-[#060608] text-white">
+          {/* Segmented Progress Bars */}
+          <div className="flex gap-1.5 px-4 pt-3">
+            {viewerQueue.map((item, i) => {
+              const fill = i < viewerPos ? 100 : i === viewerPos ? progressPct : 0;
+              return (
+                <div key={item.id} className="h-1 flex-1 overflow-hidden rounded-full bg-white/20">
+                  <div
+                    className="h-full bg-[#D4AF37] transition-all duration-75"
+                    style={{ width: `${fill}%` }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 overflow-hidden rounded-full border border-[#D4AF37]">
@@ -589,7 +758,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               <div>
                 <p className="font-semibold text-sm">{activeStatus.authorName}</p>
                 <p className="text-[11px] text-[#9898A6]">
-                  Expires in {hoursLeft(activeStatus.expiresAt)}h
+                  Expires in {hoursLeft(activeStatus.expiresAt)}h · {viewerPos + 1}/{viewerQueue.length}
                 </p>
               </div>
             </div>
@@ -621,12 +790,12 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-white/15 px-3 text-xs text-[#9898A6] hover:text-white"
                 >
                   <VolumeX size={14} />
-                  <span>Mute</span>
+                  <span>{activeStatus.isMuted ? 'Unmute' : 'Mute'}</span>
                 </button>
               )}
               <button
                 type="button"
-                onClick={() => setViewerIndex(null)}
+                onClick={closeViewer}
                 className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-white/10"
                 aria-label="Close viewer"
               >
@@ -636,11 +805,31 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
           </div>
 
           <div
-            className="relative flex flex-1 items-center justify-center p-6"
+            className="relative flex flex-1 items-center justify-center p-6 select-none"
             style={{
               backgroundColor: activeStatus.mediaType === 'text' ? activeStatus.backgroundColor : '#060608',
             }}
           >
+            {/* Left / Right navigation tap controls */}
+            {viewerPos > 0 && (
+              <button
+                type="button"
+                onClick={goPrevStory}
+                className="absolute left-3 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/75"
+                aria-label="Previous status"
+              >
+                <ChevronLeft size={20} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={goNextStory}
+              className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/75"
+              aria-label="Next status"
+            >
+              <ChevronRight size={20} />
+            </button>
+
             {activeStatus.mediaType === 'text' && (
               <p className="max-w-xl text-center font-display text-2xl sm:text-3xl font-semibold leading-relaxed">
                 {activeStatus.content}
@@ -658,6 +847,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                 src={activeStatus.mediaUrl}
                 controls
                 autoPlay
+                onEnded={goNextStory}
                 className="max-h-[70vh] max-w-full rounded-xl"
               />
             )}
@@ -669,7 +859,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
 
             {/* Viewers Drawer for own status */}
             {showViewersList && activeStatus.userId === me.id && (
-              <div className="absolute bottom-4 left-1/2 w-full max-w-md -translate-x-1/2 rounded-2xl border border-white/15 bg-[#111115] p-4 shadow-2xl">
+              <div className="absolute bottom-4 left-1/2 z-20 w-full max-w-md -translate-x-1/2 rounded-2xl border border-white/15 bg-[#111115] p-4 shadow-2xl">
                 <p className="text-xs font-semibold uppercase tracking-wider text-[#D4AF37] mb-2">
                   Viewed By ({activeStatus.viewers.length})
                 </p>

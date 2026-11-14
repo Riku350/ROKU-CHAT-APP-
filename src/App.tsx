@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Bell,
   CircleDot,
@@ -25,6 +25,11 @@ import { WelcomeSplash } from './components/WelcomeSplash';
 import { onAuthStateChanged } from 'firebase/auth';
 import { firebaseAuth, signOutGoogle } from './lib/firebaseAuth';
 import {
+  sendCallSignalFirestore,
+  subscribeConversationsFirestore,
+  subscribeIncomingCallsFirestore,
+} from './lib/firebaseBackend';
+import {
   setPresenceFirestore,
   subscribeOwnPublicProfile,
   subscribePeerProfilesFirestore,
@@ -38,7 +43,7 @@ import {
   setStoredToken,
   triggerDesktopNotification,
 } from './services/api';
-import type { AppNotification, ConversationSummary, UserProfile } from './types/rikzen';
+import type { AppNotification, ChatMessage, ConversationSummary, UserProfile } from './types/rikzen';
 
 type MainTab = 'chats' | 'updates' | 'communities' | 'calls';
 
@@ -60,6 +65,17 @@ export default function App() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const [activeCall, setActiveCall] = useState<ActiveCallSession | null>(null);
+  const activeConvIdRef = useRef<string | null>(null);
+  const activeCallRef = useRef<ActiveCallSession | null>(null);
+  const seenMsgIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    activeConvIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    activeCallRef.current = activeCall;
+  }, [activeCall]);
 
   // Sync Appearance Settings (Light/Dark/System & Font Size) onto <html>
   useEffect(() => {
@@ -121,7 +137,23 @@ export default function App() {
       // Keeps live Firestore listener active while authenticated
     });
     return () => unsubProfile();
-  }, [firebaseReady, firebaseUid, me?.id, me?.fullName, me?.bio, me?.avatarUrl, me?.onboardingCompleted, me?.phone, me?.dateOfBirth, me?.appearanceSettings?.theme, me?.appearanceSettings?.wallpaper]);
+  }, [
+    firebaseReady,
+    firebaseUid,
+    me?.id,
+    me?.fullName,
+    me?.bio,
+    me?.avatarUrl,
+    me?.onboardingCompleted,
+    me?.phone,
+    me?.dateOfBirth,
+    me?.appearanceSettings?.theme,
+    me?.appearanceSettings?.wallpaper,
+    me?.privacySettings?.lastSeen,
+    me?.privacySettings?.onlineStatus,
+    me?.privacySettings?.readReceipts,
+    me?.privacySettings?.profilePhoto,
+  ]);
 
   // Restore session silently in parallel with WelcomeSplash
   useEffect(() => {
@@ -169,17 +201,103 @@ export default function App() {
   useEffect(() => {
     if (!firebaseReady || !firebaseUid || !isServerlessFirebaseMode() || !peerIdsKey) return;
     const peerIds = peerIdsKey.split(',').filter(Boolean);
-    const unsub = subscribePeerProfilesFirestore(peerIds, (uid, isOnline, updatedAt) => {
+    const unsub = subscribePeerProfilesFirestore(peerIds, (uid, snap) => {
       setConversations((prev) =>
         prev.map((c) =>
           c.peer && c.peer.id === uid
-            ? { ...c, peer: { ...c.peer, isOnline, lastSeenAt: updatedAt } }
+            ? {
+                ...c,
+                peer: {
+                  ...c.peer,
+                  isOnline: snap.isOnline,
+                  lastSeenAt: snap.updatedAt || c.peer.lastSeenAt,
+                  typingInConversationId: snap.typingInConversationId,
+                  typingActivity: snap.typingActivity,
+                },
+              }
             : c
         )
       );
     });
     return () => unsub();
   }, [firebaseReady, firebaseUid, peerIdsKey]);
+
+  // Live Firestore conversations & incoming calls in serverless Firebase mode
+  useEffect(() => {
+    if (!firebaseReady || !firebaseUid || !me?.onboardingCompleted || !isServerlessFirebaseMode()) return;
+
+    const unsubConvs = subscribeConversationsFirestore(me.id, (list) => {
+      setConversations(list);
+      for (const c of list) {
+        const last = c.lastMessage;
+        if (last && last.senderId !== me.id) {
+          if (last.status === 'sent' && !seenMsgIdsRef.current.has(`deliv:${last.id}`)) {
+            seenMsgIdsRef.current.add(`deliv:${last.id}`);
+            apiFetch(`/api/conversations/${c.id}/delivered`, { method: 'POST' }).catch(() => {});
+          }
+          const isViewingHere =
+            activeConvIdRef.current === c.id && document.visibilityState === 'visible';
+          if (isViewingHere && c.unreadCount > 0) {
+            apiFetch(`/api/conversations/${c.id}/read`, { method: 'POST' }).catch(() => {});
+          } else if (
+            !isViewingHere &&
+            !seenMsgIdsRef.current.has(`notif:${last.id}`) &&
+            Date.now() - new Date(last.createdAt).getTime() < 20_000
+          ) {
+            seenMsgIdsRef.current.add(`notif:${last.id}`);
+            if (!c.muted) {
+              triggerDesktopNotification(c.title || 'New message', last.content || 'New message');
+            }
+          }
+        }
+      }
+    });
+
+    const unsubCalls = subscribeIncomingCallsFirestore(me.id, (incoming) => {
+      if (activeCallRef.current) {
+        sendCallSignalFirestore(incoming.callId, { status: 'busy' }).catch(() => {});
+        return;
+      }
+      setActiveCall({
+        callId: incoming.callId,
+        peerId: incoming.fromUserId,
+        peerName: incoming.fromName,
+        peerAvatar: incoming.fromAvatar,
+        callType: incoming.callType,
+        direction: 'incoming',
+        status: 'ringing',
+      });
+      triggerDesktopNotification(
+        `Incoming ${incoming.callType} call`,
+        `${incoming.fromName} is calling you on RIKZEN CHAT`
+      );
+    });
+
+    return () => {
+      unsubConvs();
+      unsubCalls();
+    };
+  }, [firebaseReady, firebaseUid, me?.id, me?.onboardingCompleted]);
+
+  // Mark active conversation read ONLY when actively opened and browser tab is visible
+  useEffect(() => {
+    if (!me?.onboardingCompleted || !activeConversationId) return;
+    const markVisibleRead = () => {
+      if (document.visibilityState !== 'visible') return;
+      apiFetch(`/api/conversations/${activeConversationId}/read`, { method: 'POST' })
+        .then(() => {
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === activeConversationId ? { ...c, unreadCount: 0, markedUnread: false } : c
+            )
+          );
+        })
+        .catch(() => {});
+    };
+    markVisibleRead();
+    document.addEventListener('visibilitychange', markVisibleRead);
+    return () => document.removeEventListener('visibilitychange', markVisibleRead);
+  }, [me?.onboardingCompleted, activeConversationId]);
 
   // Connect WebSocket & load workspace when authenticated & onboarded
   useEffect(() => {
@@ -208,7 +326,59 @@ export default function App() {
               : c
           )
         );
+      } else if (
+        event === 'typing:start' ||
+        event === 'typing:stop' ||
+        event === 'recording:start' ||
+        event === 'recording:stop'
+      ) {
+        const act =
+          event === 'typing:start'
+            ? 'typing'
+            : event === 'recording:start'
+            ? 'recording'
+            : 'idle';
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.peer && c.peer.id === payload.userId
+              ? {
+                  ...c,
+                  peer: {
+                    ...c.peer,
+                    typingInConversationId: act === 'idle' ? null : payload.conversationId,
+                    typingActivity: act,
+                  },
+                }
+              : c
+          )
+        );
+      } else if (event === 'message:new') {
+        const msg = payload as ChatMessage;
+        if (msg.senderId !== me.id) {
+          realtime.send('message:delivered', {
+            messageId: msg.id,
+            conversationId: msg.conversationId,
+          });
+          const isViewing =
+            activeConvIdRef.current === msg.conversationId && document.visibilityState === 'visible';
+          if (isViewing) {
+            apiFetch(`/api/conversations/${msg.conversationId}/read`, { method: 'POST' }).catch(() => {});
+          } else {
+            triggerDesktopNotification('New message', msg.content || `Sent ${msg.messageType}`);
+          }
+        }
+        loadConversations();
+      } else if (event === 'message:delivered' || event === 'message:read' || event === 'message:deleted') {
+        loadConversations();
       } else if (event === 'call:incoming') {
+        if (activeCallRef.current) {
+          realtime.send('call:busy', { targetUserId: payload.callerId, callId: payload.callId });
+          apiFetch(`/api/calls/${payload.callId}/status`, {
+            method: 'POST',
+            body: JSON.stringify({ status: 'busy' }),
+          }).catch(() => {});
+          return;
+        }
         setActiveCall({
           callId: payload.callId,
           peerId: payload.callerId,
@@ -218,6 +388,10 @@ export default function App() {
           direction: 'incoming',
           status: 'ringing',
         });
+        triggerDesktopNotification(
+          `Incoming ${payload.callType === 'video' ? 'video' : 'voice'} call`,
+          `${payload.caller?.full_name || 'RIKZEN User'} is calling you`
+        );
       }
     });
 
@@ -597,6 +771,7 @@ export default function App() {
 
       {activeCall && (
         <CallOverlay
+          myUid={me.id}
           call={activeCall}
           onUpdateStatus={(status) => setActiveCall((c) => (c ? { ...c, status } : null))}
           onClose={() => setActiveCall(null)}

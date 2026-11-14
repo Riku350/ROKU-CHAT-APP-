@@ -96,6 +96,16 @@ export function sanitizeMediaUrl(url: string | null | undefined): string | null 
   return url;
 }
 
+export interface PeerPresenceSnapshot {
+  isOnline: boolean;
+  updatedAt: string;
+  typingInConversationId?: string | null;
+  typingActivity?: 'typing' | 'recording' | 'idle' | null;
+  typingUpdatedAt?: string | null;
+  lastSeenPrivacy?: 'everyone' | 'friends' | 'nobody';
+  onlineStatusPrivacy?: 'everyone' | 'friends' | 'nobody';
+}
+
 export async function setPresenceFirestore(isOnline: boolean): Promise<void> {
   const fbUser = firebaseAuth.currentUser;
   if (!fbUser || !fbUser.emailVerified) return;
@@ -103,10 +113,10 @@ export async function setPresenceFirestore(isOnline: boolean): Promise<void> {
   try {
     await updateDoc(doc(db, 'publicProfiles', fbUser.uid), {
       isOnline,
+      ...(!isOnline ? { typingActivity: 'idle', typingInConversationId: null } : {}),
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
-    // Only log/ignore if doc doesn't exist yet; otherwise report through handleFirestoreError
     const msg = error instanceof Error ? error.message : String(error);
     if (!msg.includes('No document to update')) {
       handleFirestoreError(error, OperationType.UPDATE, path);
@@ -114,9 +124,27 @@ export async function setPresenceFirestore(isOnline: boolean): Promise<void> {
   }
 }
 
+export async function setTypingActivityFirestore(
+  conversationId: string | null,
+  activity: 'typing' | 'recording' | 'idle'
+): Promise<void> {
+  const fbUser = firebaseAuth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+  try {
+    await updateDoc(doc(db, 'publicProfiles', fbUser.uid), {
+      typingInConversationId: activity === 'idle' ? null : conversationId,
+      typingActivity: activity,
+      typingUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal typing status update
+  }
+}
+
 export function subscribePeerProfilesFirestore(
   peerUids: string[],
-  onUpdate: (uid: string, isOnline: boolean, updatedAt: string) => void
+  onUpdate: (uid: string, snapshot: PeerPresenceSnapshot) => void
 ): Unsubscribe {
   const uniqueUids = Array.from(new Set(peerUids.filter(Boolean)));
   const unsubs = uniqueUids.map((uid) => {
@@ -130,7 +158,21 @@ export function subscribePeerProfilesFirestore(
           typeof d.updatedAt?.toDate === 'function'
             ? d.updatedAt.toDate().toISOString()
             : new Date().toISOString();
-        onUpdate(uid, Boolean(d.isOnline), updatedIso);
+        const typingIso =
+          typeof d.typingUpdatedAt?.toDate === 'function'
+            ? d.typingUpdatedAt.toDate().toISOString()
+            : null;
+        const onlinePrivacy = (d.onlineStatusPrivacy || 'friends') as 'everyone' | 'friends' | 'nobody';
+        const seenPrivacy = (d.lastSeenPrivacy || 'friends') as 'everyone' | 'friends' | 'nobody';
+        onUpdate(uid, {
+          isOnline: onlinePrivacy === 'nobody' ? false : Boolean(d.isOnline),
+          updatedAt: seenPrivacy === 'nobody' ? '' : updatedIso,
+          typingInConversationId: (d.typingInConversationId as string | null) || null,
+          typingActivity: (d.typingActivity as 'typing' | 'recording' | 'idle' | null) || 'idle',
+          typingUpdatedAt: typingIso,
+          lastSeenPrivacy: seenPrivacy,
+          onlineStatusPrivacy: onlinePrivacy,
+        });
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, path);
@@ -180,6 +222,12 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
   const discoverableByName = profile.privacySettings?.discoverableByName ?? true;
   const discoverableByPhone = profile.privacySettings?.discoverableByPhone ?? false;
   const readReceipts = profile.privacySettings?.readReceipts ?? true;
+  const lastSeenPrivacy = profile.privacySettings?.lastSeen ?? 'friends';
+  const onlineStatusPrivacy = profile.privacySettings?.onlineStatus ?? 'friends';
+  const profilePhoto = profile.privacySettings?.profilePhoto ?? 'everyone';
+  const bioVisibility = profile.privacySettings?.bioVisibility ?? 'everyone';
+  const emailVisibility = profile.privacySettings?.emailVisibility ?? 'nobody';
+  const friendRequests = profile.privacySettings?.friendRequests ?? 'everyone';
 
   const publicRef = doc(db, 'publicProfiles', uid);
   let publicExists = false;
@@ -200,7 +248,11 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         bio: safeBio,
         onboardingCompleted: Boolean(profile.onboardingCompleted),
         isOnline: true,
+        lastSeenPrivacy,
+        onlineStatusPrivacy,
         discoverableByName,
+        typingInConversationId: null,
+        typingActivity: 'idle',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -215,6 +267,8 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         bio: safeBio,
         onboardingCompleted: Boolean(profile.onboardingCompleted),
         isOnline: true,
+        lastSeenPrivacy,
+        onlineStatusPrivacy,
         discoverableByName,
         updatedAt: serverTimestamp(),
       });
@@ -246,9 +300,16 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         fontSize: safeFont,
         bubbleStyle: safeBubble,
         appLanguage: safeLang,
+        lastSeen: lastSeenPrivacy,
+        onlineStatus: onlineStatusPrivacy,
+        profilePhoto,
+        bioVisibility,
+        emailVisibility,
+        friendRequests,
         readReceipts,
         discoverableByName,
         discoverableByPhone,
+        blockedUids: [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -266,6 +327,12 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         fontSize: safeFont,
         bubbleStyle: safeBubble,
         appLanguage: safeLang,
+        lastSeen: lastSeenPrivacy,
+        onlineStatus: onlineStatusPrivacy,
+        profilePhoto,
+        bioVisibility,
+        emailVisibility,
+        friendRequests,
         readReceipts,
         discoverableByName,
         discoverableByPhone,

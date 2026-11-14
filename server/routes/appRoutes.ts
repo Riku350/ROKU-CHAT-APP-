@@ -467,6 +467,19 @@ appRouter.delete('/friends/block/:targetId', requireAuth, (req: AuthedRequest, r
   res.json({ ok: true });
 });
 
+appRouter.delete('/friends/request/:requestId', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const fr = db
+    .prepare('SELECT * FROM friend_requests WHERE id = ? AND sender_id = ? AND status = ?')
+    .get(req.params.requestId, uid, 'pending') as any;
+  if (!fr) {
+    res.status(404).json({ error: 'Pending sent request not found.' });
+    return;
+  }
+  db.prepare('DELETE FROM friend_requests WHERE id = ?').run(fr.id);
+  res.json({ ok: true });
+});
+
 appRouter.delete('/friends/:friendId', requireAuth, (req: AuthedRequest, res) => {
   const uid = req.userId!;
   const fid = req.params.friendId;
@@ -478,15 +491,27 @@ appRouter.delete('/friends/:friendId', requireAuth, (req: AuthedRequest, res) =>
 // ----------------------------------------------------------------------------
 // Conversations & Real-Time Messages
 // ----------------------------------------------------------------------------
+function computeMessageStatus(messageId: string, senderId: string): 'sent' | 'delivered' | 'read' {
+  const receipts = db
+    .prepare('SELECT user_id, delivered_at, read_at FROM message_receipts WHERE message_id = ? AND user_id != ?')
+    .all(messageId, senderId) as Array<{ user_id: string; delivered_at: string | null; read_at: string | null }>;
+  if (receipts.length > 0 && receipts.every((r) => r.read_at)) return 'read';
+  if (receipts.some((r) => r.delivered_at)) return 'delivered';
+  return 'sent';
+}
+
 appRouter.get('/conversations', requireAuth, (req: AuthedRequest, res) => {
   const uid = req.userId!;
+  const nowIso = new Date().toISOString();
+  db.prepare('DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?').run(nowIso);
+
   const convRows = db
     .prepare(
-      `SELECT c.*, cm.muted, cm.archived, cm.last_read_at
+      `SELECT c.*, cm.muted, cm.archived, cm.pinned, cm.marked_unread, cm.disappearing_seconds, cm.chat_theme, cm.custom_list, cm.cleared_at, cm.last_read_at
        FROM conversations c
        JOIN conversation_members cm ON cm.conversation_id = c.id
        WHERE cm.user_id = ?
-       ORDER BY c.last_message_at DESC`
+       ORDER BY cm.pinned DESC, c.last_message_at DESC`
     )
     .all(uid) as any[];
 
@@ -496,19 +521,24 @@ appRouter.get('/conversations', requireAuth, (req: AuthedRequest, res) => {
         `SELECT m.*, p.full_name AS sender_name FROM messages m
          JOIN profiles p ON p.id = m.sender_id
          WHERE m.conversation_id = ?
+           AND (? IS NULL OR m.created_at > ?)
          ORDER BY m.created_at DESC LIMIT 1`
       )
-      .get(conv.id) as any;
+      .get(conv.id, conv.cleared_at || null, conv.cleared_at || null) as any;
 
-    const unreadCount = (
+    const rawUnreadCount = (
       db
         .prepare(
           `SELECT COUNT(*) AS cnt FROM messages m
            LEFT JOIN message_receipts mr ON mr.message_id = m.id AND mr.user_id = ?
-           WHERE m.conversation_id = ? AND m.sender_id != ? AND mr.read_at IS NULL AND m.is_deleted = 0`
+           WHERE m.conversation_id = ? AND m.sender_id != ? AND mr.read_at IS NULL AND m.is_deleted = 0
+             AND (? IS NULL OR m.created_at > ?)`
         )
-        .get(uid, conv.id, uid) as { cnt: number }
+        .get(uid, conv.id, uid, conv.cleared_at || null, conv.cleared_at || null) as { cnt: number }
     ).cnt;
+
+    const unreadCount = conv.marked_unread && rawUnreadCount === 0 ? 1 : rawUnreadCount;
+    const lastStatus = lastMsg && lastMsg.sender_id === uid ? computeMessageStatus(lastMsg.id, uid) : undefined;
 
     if (conv.type === 'direct') {
       const otherMember = db
@@ -532,6 +562,11 @@ appRouter.get('/conversations', requireAuth, (req: AuthedRequest, res) => {
         isBlocked: blocked,
         muted: Boolean(conv.muted),
         archived: Boolean(conv.archived),
+        pinned: Boolean(conv.pinned),
+        markedUnread: Boolean(conv.marked_unread),
+        disappearingSeconds: Number(conv.disappearing_seconds || 0),
+        chatTheme: conv.chat_theme || null,
+        customList: conv.custom_list || '',
         unreadCount,
         lastMessageAt: conv.last_message_at,
         lastMessage: lastMsg
@@ -541,6 +576,7 @@ appRouter.get('/conversations', requireAuth, (req: AuthedRequest, res) => {
               messageType: lastMsg.message_type,
               senderId: lastMsg.sender_id,
               senderName: lastMsg.sender_name,
+              status: lastStatus,
               createdAt: lastMsg.created_at,
             }
           : null,
@@ -567,10 +603,16 @@ appRouter.get('/conversations', requireAuth, (req: AuthedRequest, res) => {
         avatarUrl: group?.avatar_url || null,
         onlyAdminsMessage: Boolean(group?.only_admins_message),
         onlyAdminsEditInfo: Boolean(group?.only_admins_edit_info),
+        inviteCode: group?.invite_code || null,
         myRole: myRole || 'member',
         memberCount,
         muted: Boolean(conv.muted),
         archived: Boolean(conv.archived),
+        pinned: Boolean(conv.pinned),
+        markedUnread: Boolean(conv.marked_unread),
+        disappearingSeconds: Number(conv.disappearing_seconds || 0),
+        chatTheme: conv.chat_theme || null,
+        customList: conv.custom_list || '',
         unreadCount,
         lastMessageAt: conv.last_message_at,
         lastMessage: lastMsg
@@ -580,6 +622,7 @@ appRouter.get('/conversations', requireAuth, (req: AuthedRequest, res) => {
               messageType: lastMsg.message_type,
               senderId: lastMsg.sender_id,
               senderName: lastMsg.sender_name,
+              status: lastStatus,
               createdAt: lastMsg.created_at,
             }
           : null,
@@ -665,16 +708,23 @@ function formatMessageRow(row: any, uid: string) {
 appRouter.get('/conversations/:id/messages', requireAuth, (req: AuthedRequest, res) => {
   const uid = req.userId!;
   const convId = req.params.id;
-  const isMember = db
-    .prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
-    .get(convId, uid);
-  if (!isMember) {
+  const member = db
+    .prepare('SELECT cleared_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+    .get(convId, uid) as { cleared_at: string | null } | undefined;
+  if (!member) {
     res.status(403).json({ error: 'Access denied to this conversation.' });
     return;
   }
 
+  const now = new Date().toISOString();
+  db.prepare('DELETE FROM messages WHERE conversation_id = ? AND expires_at IS NOT NULL AND expires_at <= ?').run(
+    convId,
+    now
+  );
+
   const limit = Math.min(100, Math.max(10, Number(req.query.limit) || 60));
   const before = req.query.before ? String(req.query.before) : null;
+  const clearedAt = member.cleared_at || null;
 
   const rows = before
     ? (db
@@ -682,27 +732,41 @@ appRouter.get('/conversations/:id/messages', requireAuth, (req: AuthedRequest, r
           `SELECT m.*, p.full_name AS sender_name, p.avatar_url AS sender_avatar
            FROM messages m JOIN profiles p ON p.id = m.sender_id
            WHERE m.conversation_id = ? AND m.created_at < ?
+             AND (? IS NULL OR m.created_at > ?)
            ORDER BY m.created_at DESC LIMIT ?`
         )
-        .all(convId, before, limit) as any[])
+        .all(convId, before, clearedAt, clearedAt, limit) as any[])
     : (db
         .prepare(
           `SELECT m.*, p.full_name AS sender_name, p.avatar_url AS sender_avatar
            FROM messages m JOIN profiles p ON p.id = m.sender_id
            WHERE m.conversation_id = ?
+             AND (? IS NULL OR m.created_at > ?)
            ORDER BY m.created_at DESC LIMIT ?`
         )
-        .all(convId, limit) as any[]);
+        .all(convId, clearedAt, clearedAt, limit) as any[]);
 
-  // Mark delivered now
-  const now = new Date().toISOString();
+  // Mark undelivered messages delivered & notify senders in real time
   const updateDelivered = db.prepare(
-    'UPDATE message_receipts SET delivered_at = COALESCE(delivered_at, ?) WHERE message_id = ? AND user_id = ?'
+    'UPDATE message_receipts SET delivered_at = ? WHERE message_id = ? AND user_id = ? AND delivered_at IS NULL'
   );
+  const deliveredBySender = new Map<string, string[]>();
   for (const r of rows) {
     if (r.sender_id !== uid) {
-      updateDelivered.run(now, r.id, uid);
+      const resUp = updateDelivered.run(now, r.id, uid);
+      if (resUp.changes > 0) {
+        const arr = deliveredBySender.get(r.sender_id) || [];
+        arr.push(r.id);
+        deliveredBySender.set(r.sender_id, arr);
+      }
     }
+  }
+  for (const [senderId, messageIds] of deliveredBySender.entries()) {
+    sendToUser(senderId, 'message:delivered', {
+      conversationId: convId,
+      receiverId: uid,
+      messageIds,
+    });
   }
 
   const formatted = rows
@@ -711,6 +775,43 @@ appRouter.get('/conversations/:id/messages', requireAuth, (req: AuthedRequest, r
     .filter((m) => !m.hiddenForMe);
 
   res.json({ messages: formatted, hasMore: rows.length === limit });
+});
+
+appRouter.post('/conversations/:id/delivered', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const convId = req.params.id;
+  const isMember = db
+    .prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+    .get(convId, uid);
+  if (!isMember) {
+    res.status(403).json({ error: 'Access denied.' });
+    return;
+  }
+  const now = new Date().toISOString();
+  const pending = db
+    .prepare(
+      `SELECT m.id, m.sender_id FROM messages m
+       JOIN message_receipts mr ON mr.message_id = m.id AND mr.user_id = ?
+       WHERE m.conversation_id = ? AND m.sender_id != ? AND mr.delivered_at IS NULL`
+    )
+    .all(uid, convId, uid) as Array<{ id: string; sender_id: string }>;
+
+  const markStmt = db.prepare('UPDATE message_receipts SET delivered_at = ? WHERE message_id = ? AND user_id = ?');
+  const bySender = new Map<string, string[]>();
+  for (const item of pending) {
+    markStmt.run(now, item.id, uid);
+    const arr = bySender.get(item.sender_id) || [];
+    arr.push(item.id);
+    bySender.set(item.sender_id, arr);
+  }
+  for (const [senderId, messageIds] of bySender.entries()) {
+    sendToUser(senderId, 'message:delivered', {
+      conversationId: convId,
+      receiverId: uid,
+      messageIds,
+    });
+  }
+  res.json({ ok: true });
 });
 
 appRouter.post('/conversations/:id/read', requireAuth, (req: AuthedRequest, res) => {
@@ -728,11 +829,9 @@ appRouter.post('/conversations/:id/read', requireAuth, (req: AuthedRequest, res)
   const myPrivacy = safeJsonParse(myProfile?.privacy_settings, DEFAULT_PRIVACY);
   const now = new Date().toISOString();
 
-  db.prepare('UPDATE conversation_members SET last_read_at = ? WHERE conversation_id = ? AND user_id = ?').run(
-    now,
-    convId,
-    uid
-  );
+  db.prepare(
+    'UPDATE conversation_members SET last_read_at = ?, marked_unread = 0 WHERE conversation_id = ? AND user_id = ?'
+  ).run(now, convId, uid);
 
   if (myPrivacy.readReceipts !== false) {
     const unread = db
@@ -808,11 +907,18 @@ appRouter.post('/conversations/:id/messages', requireAuth, (req: AuthedRequest, 
   }
 
   const msgId = crypto.randomUUID();
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const timerRow = db
+    .prepare('SELECT MAX(disappearing_seconds) AS max_sec FROM conversation_members WHERE conversation_id = ?')
+    .get(convId) as { max_sec: number | null } | undefined;
+  const disappearingSec = Number(timerRow?.max_sec || 0);
+  const expiresAt = disappearingSec > 0 ? new Date(now.getTime() + disappearingSec * 1000).toISOString() : null;
 
   db.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_id, content, message_type, reply_to_id, forwarded_from_id, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, sender_id, content, message_type, reply_to_id, forwarded_from_id, metadata, expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msgId,
     convId,
@@ -822,18 +928,23 @@ appRouter.post('/conversations/:id/messages', requireAuth, (req: AuthedRequest, 
     replyToId,
     forwardedFromId,
     JSON.stringify(metadata || {}),
-    now,
-    now
+    expiresAt,
+    nowIso,
+    nowIso
   );
 
-  db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(now, convId);
+  db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(nowIso, convId);
+  db.prepare('UPDATE conversation_members SET marked_unread = 0 WHERE conversation_id = ? AND user_id = ?').run(
+    convId,
+    uid
+  );
 
   const insertReceipt = db.prepare(
     'INSERT INTO message_receipts (message_id, user_id, delivered_at, read_at) VALUES (?, ?, ?, ?)'
   );
   for (const mId of memberIds) {
     if (mId === uid) continue;
-    const deliveredAt = isUserOnline(mId) ? now : null;
+    const deliveredAt = isUserOnline(mId) ? nowIso : null;
     insertReceipt.run(msgId, mId, deliveredAt, null);
   }
 
@@ -1033,6 +1144,88 @@ appRouter.post('/conversations/:id/archive', requireAuth, (req: AuthedRequest, r
   res.json({ ok: true });
 });
 
+appRouter.post('/conversations/:id/pin', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const { pinned } = req.body || {};
+  db.prepare('UPDATE conversation_members SET pinned = ? WHERE conversation_id = ? AND user_id = ?').run(
+    pinned ? 1 : 0,
+    req.params.id,
+    uid
+  );
+  res.json({ ok: true });
+});
+
+appRouter.post('/conversations/:id/unread', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const { unread = true } = req.body || {};
+  db.prepare('UPDATE conversation_members SET marked_unread = ? WHERE conversation_id = ? AND user_id = ?').run(
+    unread ? 1 : 0,
+    req.params.id,
+    uid
+  );
+  res.json({ ok: true });
+});
+
+appRouter.post('/conversations/:id/disappearing', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const seconds = Math.max(0, Number(req.body?.seconds || 0));
+  db.prepare('UPDATE conversation_members SET disappearing_seconds = ? WHERE conversation_id = ?').run(
+    seconds,
+    req.params.id
+  );
+  const members = db
+    .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
+    .all(req.params.id) as Array<{ user_id: string }>;
+  sendToUsers(
+    members.map((m) => m.user_id),
+    'conversation:refresh',
+    { conversationId: req.params.id, updatedBy: uid }
+  );
+  res.json({ ok: true, disappearingSeconds: seconds });
+});
+
+appRouter.post('/conversations/:id/theme', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const { chatTheme = null } = req.body || {};
+  db.prepare('UPDATE conversation_members SET chat_theme = ? WHERE conversation_id = ? AND user_id = ?').run(
+    chatTheme,
+    req.params.id,
+    uid
+  );
+  res.json({ ok: true, chatTheme });
+});
+
+appRouter.post('/conversations/:id/list', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const listName = String(req.body?.listName || '').trim().slice(0, 64);
+  db.prepare('UPDATE conversation_members SET custom_list = ? WHERE conversation_id = ? AND user_id = ?').run(
+    listName,
+    req.params.id,
+    uid
+  );
+  res.json({ ok: true, customList: listName });
+});
+
+appRouter.post('/conversations/:id/clear', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const now = new Date().toISOString();
+  db.prepare('UPDATE conversation_members SET cleared_at = ?, marked_unread = 0 WHERE conversation_id = ? AND user_id = ?').run(
+    now,
+    req.params.id,
+    uid
+  );
+  res.json({ ok: true, clearedAt: now });
+});
+
+appRouter.delete('/conversations/:id', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const now = new Date().toISOString();
+  db.prepare(
+    'UPDATE conversation_members SET cleared_at = ?, archived = 1, pinned = 0, marked_unread = 0 WHERE conversation_id = ? AND user_id = ?'
+  ).run(now, req.params.id, uid);
+  res.json({ ok: true });
+});
+
 // ----------------------------------------------------------------------------
 // Groups
 // ----------------------------------------------------------------------------
@@ -1212,6 +1405,80 @@ appRouter.delete('/groups/:id/members/:userId', requireAuth, (req: AuthedRequest
   res.json({ ok: true });
 });
 
+appRouter.get('/groups/:id/invite', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const gm = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(req.params.id, uid) as { role: string } | undefined;
+  if (!gm) {
+    res.status(403).json({ error: 'Only group members can view the invite link.' });
+    return;
+  }
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id) as any;
+  if (!group) {
+    res.status(404).json({ error: 'Group not found.' });
+    return;
+  }
+  let code = group.invite_code;
+  if (!code || req.query.reset === '1') {
+    code = `RKZ-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    db.prepare('UPDATE groups SET invite_code = ? WHERE id = ?').run(code, group.id);
+  }
+  res.json({ inviteCode: code });
+});
+
+appRouter.post('/groups/join/:code', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const group = db.prepare('SELECT * FROM groups WHERE UPPER(invite_code) = ?').get(code) as any;
+  if (!group) {
+    res.status(404).json({ error: 'Invalid or expired group invite code.' });
+    return;
+  }
+  const now = new Date().toISOString();
+  db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)').run(
+    group.id,
+    uid,
+    'member',
+    now
+  );
+  db.prepare('INSERT OR IGNORE INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)').run(
+    group.conversation_id,
+    uid,
+    now
+  );
+  res.json({ ok: true, conversationId: group.conversation_id, groupId: group.id });
+});
+
+appRouter.delete('/groups/:id', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id) as any;
+  if (!group) {
+    res.status(404).json({ error: 'Group not found.' });
+    return;
+  }
+  const gm = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(group.id, uid) as { role: string } | undefined;
+  if (!gm || gm.role !== 'owner') {
+    res.status(403).json({ error: 'Only the group owner can delete this group.' });
+    return;
+  }
+  const members = db
+    .prepare('SELECT user_id FROM group_members WHERE group_id = ?')
+    .all(group.id) as Array<{ user_id: string }>;
+  db.prepare('DELETE FROM groups WHERE id = ?').run(group.id);
+  if (group.conversation_id) {
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(group.conversation_id);
+  }
+  sendToUsers(
+    members.map((m) => m.user_id),
+    'conversation:refresh',
+    { deletedGroupId: group.id }
+  );
+  res.json({ ok: true });
+});
+
 // ----------------------------------------------------------------------------
 // Statuses / Updates (24h auto expiration)
 // ----------------------------------------------------------------------------
@@ -1238,10 +1505,10 @@ appRouter.get('/statuses', requireAuth, (req: AuthedRequest, res) => {
       `SELECT s.*, p.full_name AS author_name, p.avatar_url AS author_avatar, p.rikzen_id AS author_rikzen_id
        FROM statuses s
        JOIN profiles p ON p.id = s.user_id
-       WHERE s.user_id IN (${placeholders}) AND s.expires_at > ?
+       WHERE s.expires_at > ? AND (s.user_id IN (${placeholders}) OR s.privacy = 'everyone')
        ORDER BY s.created_at DESC`
     )
-    .all(...allowedUserIds, now) as any[];
+    .all(now, ...allowedUserIds) as any[];
 
   const enriched = rows
     .filter((row) => !isBlockedBetween(uid, row.user_id))
@@ -1266,6 +1533,7 @@ appRouter.get('/statuses', requireAuth, (req: AuthedRequest, res) => {
         mediaUrl: row.media_url,
         caption: row.caption,
         backgroundColor: row.background_color,
+        privacy: row.privacy || 'friends',
         isMuted: mutedBy.includes(uid),
         viewedByMe,
         viewCount: views.length,
@@ -1280,16 +1548,33 @@ appRouter.get('/statuses', requireAuth, (req: AuthedRequest, res) => {
 
 appRouter.post('/statuses', requireAuth, (req: AuthedRequest, res) => {
   const uid = req.userId!;
-  const { mediaType = 'text', content = '', mediaUrl = null, caption = '', backgroundColor = '#141418' } =
-    req.body || {};
+  const {
+    mediaType = 'text',
+    content = '',
+    mediaUrl = null,
+    caption = '',
+    backgroundColor = '#141418',
+    privacy = 'friends',
+  } = req.body || {};
   const id = crypto.randomUUID();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   db.prepare(
-    `INSERT INTO statuses (id, user_id, media_type, content, media_url, caption, background_color, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, uid, mediaType, content, mediaUrl, caption, backgroundColor, expiresAt, now.toISOString());
+    `INSERT INTO statuses (id, user_id, media_type, content, media_url, caption, background_color, privacy, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    uid,
+    mediaType,
+    content,
+    mediaUrl,
+    caption,
+    backgroundColor,
+    privacy === 'everyone' ? 'everyone' : 'friends',
+    expiresAt,
+    now.toISOString()
+  );
 
   res.status(201).json({ id, expiresAt });
 });
@@ -1580,6 +1865,28 @@ appRouter.post('/calls', requireAuth, (req: AuthedRequest, res) => {
     callType,
   });
   res.status(201).json({ callId: id });
+});
+
+appRouter.post('/calls/:id/status', requireAuth, (req: AuthedRequest, res) => {
+  const uid = req.userId!;
+  const call = db.prepare('SELECT * FROM calls WHERE id = ?').get(req.params.id) as any;
+  if (!call || (call.caller_id !== uid && call.callee_id !== uid)) {
+    res.status(404).json({ error: 'Call record not found.' });
+    return;
+  }
+  const { status, durationSeconds } = req.body || {};
+  if (!['ringing', 'connected', 'ended', 'missed', 'rejected', 'busy'].includes(status)) {
+    res.status(400).json({ error: 'Invalid call status.' });
+    return;
+  }
+  const endedAt = ['ended', 'missed', 'rejected', 'busy'].includes(status) ? new Date().toISOString() : null;
+  db.prepare('UPDATE calls SET status = ?, ended_at = COALESCE(?, ended_at), duration_seconds = COALESCE(?, duration_seconds) WHERE id = ?').run(
+    status,
+    endedAt,
+    typeof durationSeconds === 'number' ? durationSeconds : null,
+    call.id
+  );
+  res.json({ ok: true });
 });
 
 appRouter.get('/calls', requireAuth, (req: AuthedRequest, res) => {

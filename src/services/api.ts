@@ -68,43 +68,115 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
   return data as T;
 }
 
-export async function uploadMediaFile(file: File | Blob, filename = 'upload.bin'): Promise<{
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTS = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp', 'svg',
+  'mp4', 'webm', 'mov', 'm4v', '3gp',
+  'mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'flac',
+  'pdf', 'doc', 'docx', 'txt', 'csv', 'rtf', 'zip', 'xls', 'xlsx', 'ppt', 'pptx',
+]);
+
+export function validateUploadFile(file: File | Blob, filename = 'upload.bin'): void {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error('File size exceeds the 25 MB limit.');
+  }
+  const mime = (file.type || '').toLowerCase();
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  const mimeOk =
+    mime.startsWith('image/') ||
+    mime.startsWith('video/') ||
+    mime.startsWith('audio/') ||
+    mime === 'application/pdf' ||
+    mime.includes('word') ||
+    mime.includes('document') ||
+    mime.includes('spreadsheet') ||
+    mime.includes('presentation') ||
+    mime === 'text/plain' ||
+    mime === 'text/csv' ||
+    mime === 'application/zip' ||
+    mime === 'application/octet-stream' ||
+    mime === '';
+  if (!mimeOk && !ALLOWED_UPLOAD_EXTS.has(ext)) {
+    throw new Error(`Unsupported file format (${ext || mime}).`);
+  }
+}
+
+export async function uploadMediaFile(
+  file: File | Blob,
+  filename = 'upload.bin',
+  onProgress?: (percent: number) => void
+): Promise<{
   fileUrl: string;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
 }> {
+  validateUploadFile(file, filename);
+
   if (serverlessFirebaseMode) {
-    return uploadFileToFirebaseStorage(file, filename);
+    return uploadFileToFirebaseStorage(file, filename, onProgress);
   }
+
   const form = new FormData();
   form.append('file', file, filename);
-  try {
-    const token = getStoredToken();
-    const headers = new Headers();
-    if (token) headers.set('Authorization', `Bearer ${token}`);
-    const res = await fetch('/api/uploads', {
-      method: 'POST',
-      body: form,
-      headers,
-      credentials: 'include',
-    });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.status === 404 || !contentType.includes('application/json')) {
-      serverlessFirebaseMode = true;
-      return uploadFileToFirebaseStorage(file, filename);
+  const token = getStoredToken();
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/uploads', true);
+    xhr.withCredentials = true;
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || `Upload failed (${res.status})`);
-    }
-    return data;
-  } catch (err) {
-    if (serverlessFirebaseMode) {
-      return uploadFileToFirebaseStorage(file, filename);
-    }
-    throw err;
-  }
+
+    xhr.upload.onprogress = (evt) => {
+      if (evt.lengthComputable && onProgress) {
+        onProgress(Math.min(99, Math.round((evt.loaded / evt.total) * 100)));
+      }
+    };
+
+    xhr.onload = async () => {
+      const contentType = xhr.getResponseHeader('content-type') || '';
+      if (xhr.status === 404 || !contentType.includes('application/json')) {
+        serverlessFirebaseMode = true;
+        try {
+          const fbRes = await uploadFileToFirebaseStorage(file, filename, onProgress);
+          resolve(fbRes);
+        } catch (fbErr) {
+          reject(fbErr);
+        }
+        return;
+      }
+
+      let data: any = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        data = {};
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(data.error || `Upload failed (${xhr.status})`));
+        return;
+      }
+      onProgress?.(100);
+      resolve(data);
+    };
+
+    xhr.onerror = async () => {
+      if (serverlessFirebaseMode) {
+        try {
+          const fbRes = await uploadFileToFirebaseStorage(file, filename, onProgress);
+          resolve(fbRes);
+        } catch (fbErr) {
+          reject(fbErr);
+        }
+        return;
+      }
+      reject(new Error('Network error while uploading file.'));
+    };
+
+    xhr.send(form);
+  });
 }
 
 export interface QueuedUnsentMessage {

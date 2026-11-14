@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, Flag, ImagePlus, LogOut, Shield, Trash2, UserPlus, X } from 'lucide-react';
+import { Check, Copy, Flag, ImagePlus, Link2, LogOut, RefreshCw, Shield, Trash2, UserPlus, X } from 'lucide-react';
 import { apiFetch, uploadMediaFile } from '../services/api';
 import type { PublicPeer, UserProfile } from '../types/rikzen';
 
@@ -9,12 +9,15 @@ interface CreateGroupModalProps {
 }
 
 export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ onClose, onCreated }) => {
+  const [mode, setMode] = useState<'create' | 'join'>('create');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [friends, setFriends] = useState<PublicPeer[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch('/api/friends')
@@ -28,6 +31,26 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ onClose, onC
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrMsg(null);
+    if (mode === 'join') {
+      const cleanCode = inviteCode.trim().split('/').pop() || '';
+      if (!cleanCode) return;
+      setCreating(true);
+      try {
+        const res = await apiFetch<{ conversationId: string }>(
+          `/api/groups/join/${encodeURIComponent(cleanCode)}`,
+          { method: 'POST' }
+        );
+        onCreated(res.conversationId);
+        onClose();
+      } catch (err: any) {
+        setErrMsg(err?.message || 'Unable to join group.');
+      } finally {
+        setCreating(false);
+      }
+      return;
+    }
+
     if (!name.trim()) return;
     setCreating(true);
     try {
@@ -47,6 +70,8 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ onClose, onC
       });
       onCreated(res.conversationId);
       onClose();
+    } catch (err: any) {
+      setErrMsg(err?.message || 'Unable to create group.');
     } finally {
       setCreating(false);
     }
@@ -59,69 +84,111 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ onClose, onC
         className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-[#D4AF37]/25 bg-[#111115] p-6 text-white shadow-2xl"
       >
         <div className="flex items-center justify-between pb-3 border-b border-white/10">
-          <h3 className="font-display text-lg font-semibold">Create New Group</h3>
+          <h3 className="font-display text-lg font-semibold">
+            {mode === 'create' ? 'Create New Group' : 'Join Group via Invite'}
+          </h3>
           <button type="button" onClick={onClose} className="text-[#9898A6] hover:text-white">
             <X size={20} />
           </button>
         </div>
 
-        <div className="mt-4 space-y-3 overflow-y-auto pr-1">
-          <input
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Group name"
-            className="h-11 w-full rounded-xl border border-white/10 bg-[#09090B] px-3.5 text-sm text-white focus:border-[#D4AF37] focus:outline-none"
-          />
-          <textarea
-            rows={2}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Group description (optional)"
-            className="w-full rounded-xl border border-white/10 bg-[#09090B] p-3 text-sm text-white focus:border-[#D4AF37] focus:outline-none"
-          />
-          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-white/20 p-3 text-xs text-[#9898A6] hover:border-[#D4AF37]">
-            <ImagePlus size={16} className="text-[#D4AF37]" />
-            <span>{avatarFile ? avatarFile.name : 'Upload group photo (optional)'}</span>
-            <input type="file" accept="image/*" className="hidden" onChange={(e) => setAvatarFile(e.target.files?.[0] || null)} />
-          </label>
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => { setMode('create'); setErrMsg(null); }}
+            className={`flex-1 min-h-[38px] rounded-xl text-xs font-semibold ${
+              mode === 'create' ? 'bg-[#D4AF37] text-[#09090B]' : 'bg-white/5 text-[#9898A6]'
+            }`}
+          >
+            New Group
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode('join'); setErrMsg(null); }}
+            className={`flex-1 min-h-[38px] rounded-xl text-xs font-semibold ${
+              mode === 'join' ? 'bg-[#D4AF37] text-[#09090B]' : 'bg-white/5 text-[#9898A6]'
+            }`}
+          >
+            Join by Invite Code
+          </button>
+        </div>
 
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-[#9898A6] mb-2">
-              Add Friends ({selectedIds.length} selected)
-            </p>
-            <div className="max-h-48 space-y-2 overflow-y-auto">
-              {friends.length === 0 ? (
-                <p className="text-xs text-[#9898A6]">Connect with friends first to add them to groups.</p>
-              ) : (
-                friends.map((f) => {
-                  const selected = selectedIds.includes(f.id);
-                  return (
-                    <button
-                      key={f.id}
-                      type="button"
-                      onClick={() => toggleFriend(f.id)}
-                      className={`flex w-full items-center justify-between rounded-xl border p-2.5 text-left text-sm ${
-                        selected ? 'border-[#D4AF37] bg-[#D4AF37]/15' : 'border-white/10 bg-[#09090B]'
-                      }`}
-                    >
-                      <span>{f.fullName}</span>
-                      {selected && <Check size={16} className="text-[#D4AF37]" />}
-                    </button>
-                  );
-                })
-              )}
+        {errMsg && (
+          <div className="mt-3 rounded-xl border border-red-500/40 bg-red-500/15 px-3 py-2 text-xs text-red-200">
+            {errMsg}
+          </div>
+        )}
+
+        {mode === 'join' ? (
+          <div className="mt-4 space-y-3">
+            <input
+              type="text"
+              required
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              placeholder="Paste group invite code or link..."
+              className="h-11 w-full rounded-xl border border-white/10 bg-[#09090B] px-3.5 text-sm text-white focus:border-[#D4AF37] focus:outline-none"
+            />
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3 overflow-y-auto pr-1">
+            <input
+              type="text"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Group name"
+              className="h-11 w-full rounded-xl border border-white/10 bg-[#09090B] px-3.5 text-sm text-white focus:border-[#D4AF37] focus:outline-none"
+            />
+            <textarea
+              rows={2}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Group description (optional)"
+              className="w-full rounded-xl border border-white/10 bg-[#09090B] p-3 text-sm text-white focus:border-[#D4AF37] focus:outline-none"
+            />
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-white/20 p-3 text-xs text-[#9898A6] hover:border-[#D4AF37]">
+              <ImagePlus size={16} className="text-[#D4AF37]" />
+              <span>{avatarFile ? avatarFile.name : 'Upload group photo (optional)'}</span>
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => setAvatarFile(e.target.files?.[0] || null)} />
+            </label>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#9898A6] mb-2">
+                Add Friends ({selectedIds.length} selected)
+              </p>
+              <div className="max-h-48 space-y-2 overflow-y-auto">
+                {friends.length === 0 ? (
+                  <p className="text-xs text-[#9898A6]">Connect with friends first to add them to groups.</p>
+                ) : (
+                  friends.map((f) => {
+                    const selected = selectedIds.includes(f.id);
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => toggleFriend(f.id)}
+                        className={`flex w-full items-center justify-between rounded-xl border p-2.5 text-left text-sm ${
+                          selected ? 'border-[#D4AF37] bg-[#D4AF37]/15' : 'border-white/10 bg-[#09090B]'
+                        }`}
+                      >
+                        <span>{f.fullName}</span>
+                        {selected && <Check size={16} className="text-[#D4AF37]" />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <button
           type="submit"
           disabled={creating}
           className="mt-5 min-h-[46px] w-full rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B]"
         >
-          {creating ? 'Creating...' : 'Create Group'}
+          {creating ? 'Please wait...' : mode === 'join' ? 'Join Group' : 'Create Group'}
         </button>
       </form>
     </div>
@@ -140,12 +207,19 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
   const [members, setMembers] = useState<any[]>([]);
   const [friends, setFriends] = useState<PublicPeer[]>([]);
   const [onlyAdminsMsg, setOnlyAdminsMsg] = useState(false);
+  const [inviteCode, setInviteCode] = useState<string>('');
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   const load = async () => {
-    const [gRes, fRes] = await Promise.all([apiFetch(`/api/groups/${groupId}`), apiFetch('/api/friends')]);
+    const [gRes, fRes, invRes] = await Promise.all([
+      apiFetch(`/api/groups/${groupId}`),
+      apiFetch('/api/friends'),
+      apiFetch(`/api/groups/${groupId}/invite`).catch(() => ({ inviteCode: '' })),
+    ]);
     setGroup(gRes.group);
     setMembers(gRes.members || []);
     setOnlyAdminsMsg(Boolean(gRes.group?.only_admins_message));
+    setInviteCode(invRes.inviteCode || gRes.group?.invite_code || '');
     setFriends(fRes.friends || []);
   };
 
@@ -155,6 +229,7 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
 
   if (!group) return null;
   const myMember = members.find((m) => m.id === me.id);
+  const isOwner = myMember?.role === 'owner';
   const isAdmin = myMember && ['owner', 'admin'].includes(myMember.role);
 
   const togglePermission = async () => {
@@ -165,6 +240,18 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
     });
     setOnlyAdminsMsg(next);
     onUpdated();
+  };
+
+  const resetInviteCode = async () => {
+    const res = await apiFetch<{ inviteCode: string }>(`/api/groups/${groupId}/invite?reset=true`);
+    setInviteCode(res.inviteCode || '');
+  };
+
+  const copyInvite = async () => {
+    if (!inviteCode) return;
+    await navigator.clipboard.writeText(inviteCode).catch(() => {});
+    setCopiedInvite(true);
+    setTimeout(() => setCopiedInvite(false), 2000);
   };
 
   const addMember = async (userId: string) => {
@@ -196,6 +283,12 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
     }
   };
 
+  const deleteGroup = async () => {
+    await apiFetch(`/api/groups/${groupId}`, { method: 'DELETE' });
+    onUpdated();
+    onClose();
+  };
+
   const reportGroup = async () => {
     await apiFetch('/api/reports', {
       method: 'POST',
@@ -220,6 +313,39 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
         </div>
 
         <div className="mt-4 flex-1 space-y-5 overflow-y-auto pr-1">
+          {inviteCode && (
+            <div className="rounded-xl border border-[#D4AF37]/25 bg-[#09090B] p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-xs font-semibold text-[#D4AF37]">
+                    <Link2 size={13} /> Group Invite Code
+                  </p>
+                  <p className="mt-1 font-mono-id text-sm font-bold tracking-wider text-white">{inviteCode}</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={copyInvite}
+                    className="flex min-h-[36px] items-center gap-1 rounded-lg bg-[#D4AF37] px-3 text-xs font-semibold text-[#09090B]"
+                  >
+                    {copiedInvite ? <Check size={13} /> : <Copy size={13} />}
+                    <span>{copiedInvite ? 'Copied' : 'Copy'}</span>
+                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={resetInviteCode}
+                      className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-[#9898A6] hover:text-white"
+                      title="Reset invite code"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {isAdmin && (
             <div className="flex items-center justify-between rounded-xl border border-[#D4AF37]/25 bg-[#09090B] p-3.5">
               <div>
@@ -305,7 +431,7 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
             </div>
           )}
 
-          <div className="flex gap-2 pt-2 border-t border-white/10">
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
             <button
               type="button"
               onClick={() => removeOrLeave(me.id)}
@@ -314,13 +440,23 @@ export const GroupManageModal: React.FC<GroupManageModalProps> = ({ groupId, me,
               <LogOut size={14} />
               <span>Leave Group</span>
             </button>
+            {isOwner && (
+              <button
+                type="button"
+                onClick={deleteGroup}
+                className="flex flex-1 min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-red-600/80 text-xs font-semibold text-white hover:bg-red-600"
+              >
+                <Trash2 size={14} />
+                <span>Delete Group</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={reportGroup}
               className="flex flex-1 min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-white/5 text-xs font-medium text-[#9898A6] hover:text-white"
             >
               <Flag size={14} />
-              <span>Report Group</span>
+              <span>Report</span>
             </button>
           </div>
         </div>

@@ -107,6 +107,21 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
     }
   };
 
+  const cancelRequest = async (requestId: string) => {
+    setStatusMsg(null);
+    try {
+      await apiFetch(`/api/friends/request/${requestId}`, { method: 'DELETE' });
+      setStatusMsg('Friend request cancelled.');
+      await Promise.all([
+        loadFriendsData(),
+        query.trim().length >= 2 ? handleSearch() : Promise.resolve(),
+      ]);
+      onRefreshData();
+    } catch (err: any) {
+      setStatusMsg(formatErr(err));
+    }
+  };
+
   const respondRequest = async (requestId: string, action: 'accept' | 'reject' | 'block') => {
     setStatusMsg(null);
     try {
@@ -342,6 +357,14 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
                           <MessageSquare size={14} />
                           <span>Message</span>
                         </button>
+                      ) : u.relationship === 'sent' && u.requestId ? (
+                        <button
+                          type="button"
+                          onClick={() => cancelRequest(u.requestId!)}
+                          className="min-h-[40px] rounded-xl border border-red-500/30 bg-red-500/10 px-3 text-xs font-medium text-red-400 hover:bg-red-500/20"
+                        >
+                          Cancel Request
+                        </button>
                       ) : u.relationship === 'sent' ? (
                         <span className="text-xs font-medium text-slate-500 dark:text-[#9898A6]">Request Pending</span>
                       ) : u.relationship === 'received' && u.requestId ? (
@@ -439,7 +462,13 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
                       <p className="font-semibold text-sm">{r.receiver_name}</p>
                       <p className="font-mono-id text-xs text-[#D4AF37]">{r.receiver_rikzen_id}</p>
                     </div>
-                    <span className="text-xs text-slate-500 dark:text-[#9898A6]">Pending Acceptance</span>
+                    <button
+                      type="button"
+                      onClick={() => cancelRequest(r.id)}
+                      className="min-h-[38px] rounded-lg border border-red-500/30 bg-red-500/10 px-3 text-xs font-medium text-red-400 hover:bg-red-500/20"
+                    >
+                      Cancel Request
+                    </button>
                   </div>
                 ))
               )}

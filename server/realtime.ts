@@ -113,6 +113,50 @@ export function initRealtimeServer(server: HttpServer): WebSocketServer {
       broadcastPresence(session.uid, true);
     }
 
+    // Deliver any queued messages waiting while this user was offline & notify senders immediately
+    try {
+      const nowIso = new Date().toISOString();
+      const pendingReceipts = db
+        .prepare(
+          `SELECT mr.message_id, m.conversation_id, m.sender_id
+           FROM message_receipts mr
+           JOIN messages m ON m.id = mr.message_id
+           WHERE mr.user_id = ? AND mr.delivered_at IS NULL AND m.sender_id != ?`
+        )
+        .all(session.uid, session.uid) as Array<{
+        message_id: string;
+        conversation_id: string;
+        sender_id: string;
+      }>;
+
+      if (pendingReceipts.length > 0) {
+        const markDeliv = db.prepare(
+          'UPDATE message_receipts SET delivered_at = ? WHERE message_id = ? AND user_id = ? AND delivered_at IS NULL'
+        );
+        const byConvSender = new Map<string, { conversationId: string; senderId: string; messageIds: string[] }>();
+        for (const row of pendingReceipts) {
+          markDeliv.run(nowIso, row.message_id, session.uid);
+          const key = `${row.conversation_id}:${row.sender_id}`;
+          const entry = byConvSender.get(key) || {
+            conversationId: row.conversation_id,
+            senderId: row.sender_id,
+            messageIds: [],
+          };
+          entry.messageIds.push(row.message_id);
+          byConvSender.set(key, entry);
+        }
+        for (const entry of byConvSender.values()) {
+          sendToUser(entry.senderId, 'message:delivered', {
+            conversationId: entry.conversationId,
+            receiverId: session.uid,
+            messageIds: entry.messageIds,
+          });
+        }
+      }
+    } catch {
+      // ignore delivery catch-up errors
+    }
+
     ws.send(JSON.stringify({ event: 'ws:ready', payload: { userId: session.uid } }));
 
     ws.on('pong', () => {
@@ -127,7 +171,9 @@ export function initRealtimeServer(server: HttpServer): WebSocketServer {
 
         switch (msg.event) {
           case 'typing:start':
-          case 'typing:stop': {
+          case 'typing:stop':
+          case 'recording:start':
+          case 'recording:stop': {
             const { conversationId } = msg.payload || {};
             if (!conversationId) return;
             const members = db
@@ -140,6 +186,25 @@ export function initRealtimeServer(server: HttpServer): WebSocketServer {
               msg.event,
               { conversationId, userId: uid }
             );
+            break;
+          }
+
+          case 'message:delivered': {
+            const { messageId, conversationId } = msg.payload || {};
+            if (!messageId || !conversationId) return;
+            const nowIso = new Date().toISOString();
+            const mRow = db
+              .prepare('SELECT sender_id FROM messages WHERE id = ? AND conversation_id = ?')
+              .get(messageId, conversationId) as { sender_id: string } | undefined;
+            if (!mRow || mRow.sender_id === uid) return;
+            db.prepare(
+              'UPDATE message_receipts SET delivered_at = COALESCE(delivered_at, ?) WHERE message_id = ? AND user_id = ?'
+            ).run(nowIso, messageId, uid);
+            sendToUser(mRow.sender_id, 'message:delivered', {
+              conversationId,
+              receiverId: uid,
+              messageIds: [messageId],
+            });
             break;
           }
 
@@ -161,6 +226,7 @@ export function initRealtimeServer(server: HttpServer): WebSocketServer {
 
           case 'call:accept':
           case 'call:reject':
+          case 'call:busy':
           case 'call:end':
           case 'webrtc:offer':
           case 'webrtc:answer':
@@ -171,6 +237,11 @@ export function initRealtimeServer(server: HttpServer): WebSocketServer {
               db.prepare("UPDATE calls SET status = 'connected' WHERE id = ?").run(callId);
             } else if (msg.event === 'call:reject' && callId) {
               db.prepare("UPDATE calls SET status = 'rejected', ended_at = ? WHERE id = ?").run(
+                new Date().toISOString(),
+                callId
+              );
+            } else if (msg.event === 'call:busy' && callId) {
+              db.prepare("UPDATE calls SET status = 'busy', ended_at = ? WHERE id = ?").run(
                 new Date().toISOString(),
                 callId
               );

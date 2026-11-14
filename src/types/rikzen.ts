@@ -70,6 +70,8 @@ export interface PublicPeer {
   email: string | null;
   isOnline: boolean;
   lastSeenAt: string | null;
+  typingInConversationId?: string | null;
+  typingActivity?: 'typing' | 'recording' | 'idle' | null;
   isFriend: boolean;
   relationship?: 'friends' | 'sent' | 'received' | 'rejected' | 'none';
   requestId?: string | null;
@@ -100,6 +102,7 @@ export interface ConversationSummary {
   title: string;
   description?: string;
   avatarUrl: string | null;
+  inviteCode?: string | null;
   peer?: PublicPeer | null;
   isBlocked?: boolean;
   onlyAdminsMessage?: boolean;
@@ -108,6 +111,11 @@ export interface ConversationSummary {
   memberCount?: number;
   muted: boolean;
   archived: boolean;
+  pinned?: boolean;
+  markedUnread?: boolean;
+  disappearingSeconds?: number;
+  chatTheme?: string | null;
+  customList?: string;
   unreadCount: number;
   lastMessageAt: string;
   lastMessage: {
@@ -116,6 +124,7 @@ export interface ConversationSummary {
     messageType: string;
     senderId: string;
     senderName: string;
+    status?: 'sent' | 'delivered' | 'read';
     createdAt: string;
   } | null;
 }
@@ -145,7 +154,9 @@ export interface ChatMessage {
   reactions: Array<{ emoji: string; user_id: string }>;
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string | null;
   pendingLocal?: boolean;
+  failedLocal?: boolean;
 }
 
 export interface StatusItem {
@@ -159,6 +170,7 @@ export interface StatusItem {
   mediaUrl: string | null;
   caption: string;
   backgroundColor: string;
+  privacy?: 'everyone' | 'friends' | 'contacts' | 'selected';
   isMuted: boolean;
   viewedByMe: boolean;
   viewCount: number;
@@ -215,7 +227,7 @@ export interface CallLogItem {
   caller_id: string;
   callee_id: string;
   call_type: 'voice' | 'video';
-  status: 'ringing' | 'connected' | 'ended' | 'missed' | 'rejected';
+  status: 'ringing' | 'connected' | 'ended' | 'missed' | 'rejected' | 'busy';
   started_at: string;
   ended_at: string | null;
   duration_seconds: number;

@@ -545,3 +545,76 @@ create policy "storage_authenticated_upload" on storage.objects
 create policy "storage_authenticated_read" on storage.objects
   for select to authenticated
   using (bucket_id in ('avatars', 'chat-media', 'statuses'));
+
+-- ============================================================================
+-- RIKZEN CHAT 20261114 UPGRADE EXTENSIONS (See also supabase/migrations/)
+-- ============================================================================
+alter table if exists public.conversation_members
+  add column if not exists pinned boolean not null default false,
+  add column if not exists pinned_at timestamptz,
+  add column if not exists marked_unread boolean not null default false,
+  add column if not exists disappearing_seconds int not null default 0,
+  add column if not exists chat_theme text,
+  add column if not exists custom_list text not null default '',
+  add column if not exists cleared_at timestamptz;
+
+alter table if exists public.groups
+  add column if not exists invite_code text unique;
+
+alter table if exists public.messages
+  add column if not exists expires_at timestamptz;
+
+alter table if exists public.statuses
+  add column if not exists privacy text not null default 'friends',
+  add column if not exists allowed_viewer_ids uuid[] not null default '{}',
+  add column if not exists excluded_viewer_ids uuid[] not null default '{}';
+
+create table if not exists public.user_presence (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  is_online boolean not null default false,
+  active_devices int not null default 0,
+  last_seen_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.typing_indicators (
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  activity text not null default 'typing' check (activity in ('typing', 'recording', 'idle')),
+  updated_at timestamptz not null default now(),
+  primary key (conversation_id, user_id)
+);
+
+create table if not exists public.status_reactions (
+  id uuid primary key default gen_random_uuid(),
+  status_id uuid not null references public.statuses(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  emoji text not null,
+  created_at timestamptz not null default now(),
+  unique (status_id, user_id, emoji)
+);
+
+create table if not exists public.contacts (
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  contact_id uuid not null references public.profiles(id) on delete cascade,
+  nickname text,
+  custom_list text default '',
+  is_favorite boolean not null default false,
+  created_at timestamptz not null default now(),
+  primary key (owner_id, contact_id)
+);
+
+create table if not exists public.user_settings (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  last_seen_privacy text not null default 'friends',
+  online_privacy text not null default 'everyone',
+  status_privacy text not null default 'friends',
+  read_receipts boolean not null default true,
+  push_enabled boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
+create or replace view public.chat_requests as
+  select id, sender_id, receiver_id, status, created_at, updated_at
+  from public.friend_requests;
+

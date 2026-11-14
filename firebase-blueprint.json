@@ -5,16 +5,8 @@
       "description": "Bootstrap connectivity verification document",
       "type": "object",
       "properties": {
-        "ok": {
-          "type": "boolean",
-          "description": "Indicates Firestore connectivity check passed"
-        },
-        "checkedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Timestamp of check"
-        }
+        "ok": { "type": "boolean" },
+        "checkedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["ok", "checkedAt"]
     },
@@ -23,25 +15,9 @@
       "description": "Trusted administrator marker document",
       "type": "object",
       "properties": {
-        "uid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Firebase Auth UID of the administrator"
-        },
-        "email": {
-          "type": "string",
-          "format": "email",
-          "maxLength": 160,
-          "description": "Administrator verified email address"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Server timestamp when admin access was granted"
-        }
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["uid", "email", "createdAt"]
     },
@@ -50,60 +26,21 @@
       "description": "Publicly discoverable RIKZEN CHAT identity without private PII",
       "type": "object",
       "properties": {
-        "uid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Firebase Auth UID"
-        },
-        "rikzenId": {
-          "type": "string",
-          "minLength": 8,
-          "maxLength": 24,
-          "pattern": "^RIKZEN-[A-Z0-9]{4,12}$",
-          "description": "Permanent unique RIKZEN User ID"
-        },
-        "fullName": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80,
-          "description": "Display full name"
-        },
-        "avatarUrl": {
-          "type": "string",
-          "maxLength": 512,
-          "description": "Profile picture URL"
-        },
-        "bio": {
-          "type": "string",
-          "maxLength": 220,
-          "description": "Public profile bio"
-        },
-        "onboardingCompleted": {
-          "type": "boolean",
-          "description": "Whether onboarding is complete"
-        },
-        "isOnline": {
-          "type": "boolean",
-          "description": "Current presence flag"
-        },
-        "discoverableByName": {
-          "type": "boolean",
-          "description": "Controls name search visibility"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Last update server timestamp"
-        }
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "rikzenId": { "type": "string", "minLength": 8, "maxLength": 24, "pattern": "^RIKZEN-[A-Z0-9]{4,12}$" },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "avatarUrl": { "type": "string", "maxLength": 512 },
+        "bio": { "type": "string", "maxLength": 220 },
+        "onboardingCompleted": { "type": "boolean" },
+        "isOnline": { "type": "boolean" },
+        "lastSeenPrivacy": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "onlineStatusPrivacy": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "discoverableByName": { "type": "boolean" },
+        "typingInConversationId": { "type": "string", "maxLength": 128 },
+        "typingActivity": { "type": "string", "enum": ["typing", "recording", "idle"] },
+        "typingUpdatedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["uid", "rikzenId", "fullName", "onboardingCompleted", "createdAt", "updatedAt"]
     },
@@ -112,90 +49,29 @@
       "description": "Private PII and personal preferences accessible strictly by owner or admin",
       "type": "object",
       "properties": {
-        "uid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Firebase Auth UID"
-        },
-        "rikzenId": {
-          "type": "string",
-          "minLength": 8,
-          "maxLength": 24,
-          "pattern": "^RIKZEN-[A-Z0-9]{4,12}$",
-          "description": "Permanent unique RIKZEN User ID"
-        },
-        "email": {
-          "type": "string",
-          "format": "email",
-          "maxLength": 160,
-          "description": "Private verified email"
-        },
-        "phone": {
-          "type": "string",
-          "maxLength": 32,
-          "description": "Private phone number"
-        },
-        "dateOfBirth": {
-          "type": "string",
-          "maxLength": 24,
-          "description": "Optional date of birth"
-        },
-        "theme": {
-          "type": "string",
-          "enum": ["dark", "light", "system"],
-          "description": "Preferred UI theme"
-        },
-        "wallpaper": {
-          "type": "string",
-          "enum": ["obsidian-web", "midnight", "emerald-silk", "champagne-mist"],
-          "description": "Chat wallpaper selection"
-        },
-        "accentColor": {
-          "type": "string",
-          "enum": ["gold", "emerald", "ivory"],
-          "description": "Accent color choice"
-        },
-        "fontSize": {
-          "type": "string",
-          "enum": ["small", "medium", "large"],
-          "description": "Typography scale"
-        },
-        "bubbleStyle": {
-          "type": "string",
-          "enum": ["rounded", "classic", "minimal"],
-          "description": "Chat bubble style"
-        },
-        "appLanguage": {
-          "type": "string",
-          "maxLength": 16,
-          "description": "Preferred app language code"
-        },
-        "readReceipts": {
-          "type": "boolean",
-          "description": "Read receipt preference"
-        },
-        "discoverableByName": {
-          "type": "boolean",
-          "description": "Name discovery preference"
-        },
-        "discoverableByPhone": {
-          "type": "boolean",
-          "description": "Phone discovery preference"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Update server timestamp"
-        }
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "rikzenId": { "type": "string", "minLength": 8, "maxLength": 24, "pattern": "^RIKZEN-[A-Z0-9]{4,12}$" },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "dateOfBirth": { "type": "string", "maxLength": 24 },
+        "theme": { "type": "string", "enum": ["dark", "light", "system"] },
+        "wallpaper": { "type": "string", "enum": ["obsidian-web", "midnight", "emerald-silk", "champagne-mist"] },
+        "accentColor": { "type": "string", "enum": ["gold", "emerald", "ivory"] },
+        "fontSize": { "type": "string", "enum": ["small", "medium", "large"] },
+        "bubbleStyle": { "type": "string", "enum": ["rounded", "classic", "minimal"] },
+        "appLanguage": { "type": "string", "maxLength": 16 },
+        "lastSeen": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "onlineStatus": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "profilePhoto": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "bioVisibility": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "emailVisibility": { "type": "string", "enum": ["everyone", "friends", "nobody"] },
+        "friendRequests": { "type": "string", "enum": ["everyone", "nobody"] },
+        "readReceipts": { "type": "boolean" },
+        "discoverableByName": { "type": "boolean" },
+        "discoverableByPhone": { "type": "boolean" },
+        "blockedUids": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["uid", "rikzenId", "email", "createdAt", "updatedAt"]
     },
@@ -204,44 +80,12 @@
       "description": "Cross-user friend connection request",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Request document ID"
-        },
-        "senderUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Sender Firebase Auth UID"
-        },
-        "receiverUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Receiver Firebase Auth UID"
-        },
-        "status": {
-          "type": "string",
-          "enum": ["pending", "accepted", "rejected"],
-          "description": "Current friend request state"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Last state change server timestamp"
-        }
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "receiverUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "senderUid", "receiverUid", "status", "createdAt", "updatedAt"]
     },
@@ -250,87 +94,44 @@
       "description": "Direct or group chat room header",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Conversation ID"
-        },
-        "type": {
-          "type": "string",
-          "enum": ["direct", "group"],
-          "description": "Conversation type"
-        },
-        "title": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 120,
-          "description": "Conversation or group title"
-        },
-        "createdBy": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Owner UID who created the conversation"
-        },
-        "peerUid": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Optional second user UID for 1-to-1 chats"
-        },
-        "lastMessageText": {
-          "type": "string",
-          "maxLength": 500,
-          "description": "Latest message preview"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Last message server timestamp"
-        }
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["direct", "group"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "avatarUrl": { "type": "string", "maxLength": 512 },
+        "inviteCode": { "type": "string", "maxLength": 32 },
+        "onlyAdminsMessage": { "type": "boolean" },
+        "onlyAdminsEditInfo": { "type": "boolean" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "peerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberUids": { "type": "array", "items": { "type": "string" } },
+        "lastMessageId": { "type": "string", "maxLength": 128 },
+        "lastMessageText": { "type": "string", "maxLength": 500 },
+        "lastMessageType": { "type": "string", "maxLength": 32 },
+        "lastMessageSenderUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "type", "title", "createdBy", "createdAt", "updatedAt"]
     },
     "ConversationMember": {
       "title": "ConversationMember",
-      "description": "Membership record inside a conversation subcollection",
+      "description": "Membership record and personal chat controls inside a conversation subcollection",
       "type": "object",
       "properties": {
-        "uid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Member Firebase Auth UID"
-        },
-        "conversationId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Parent conversation ID"
-        },
-        "role": {
-          "type": "string",
-          "enum": ["owner", "admin", "member"],
-          "description": "Member role inside conversation"
-        },
-        "joinedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Membership creation timestamp"
-        }
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "conversationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["owner", "admin", "member"] },
+        "muted": { "type": "boolean" },
+        "archived": { "type": "boolean" },
+        "pinned": { "type": "boolean" },
+        "markedUnread": { "type": "boolean" },
+        "disappearingSeconds": { "type": "integer" },
+        "chatTheme": { "type": "string", "maxLength": 32 },
+        "customList": { "type": "string", "maxLength": 64 },
+        "clearedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "lastReadAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "joinedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["uid", "conversationId", "role", "joinedAt"]
     },
@@ -339,64 +140,39 @@
       "description": "Real-time message stored inside a conversation",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Message ID"
-        },
-        "conversationId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Parent conversation ID"
-        },
-        "senderUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Author Firebase Auth UID"
-        },
-        "recipientUid": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Optional direct peer UID"
-        },
-        "content": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 4000,
-          "description": "Message body"
-        },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "conversationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberUids": { "type": "array", "items": { "type": "string" } },
+        "content": { "type": "string", "minLength": 1, "maxLength": 4000 },
         "messageType": {
           "type": "string",
-          "enum": ["text", "image", "video", "document", "audio", "voice", "location", "system"],
-          "description": "Message kind"
+          "enum": ["text", "image", "video", "document", "audio", "voice", "location", "system"]
         },
-        "isDeleted": {
-          "type": "boolean",
-          "description": "Soft-delete flag"
-        },
-        "isPinned": {
-          "type": "boolean",
-          "description": "Pin flag"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Last update server timestamp"
-        }
+        "replyToId": { "type": "string", "maxLength": 128 },
+        "replyToText": { "type": "string", "maxLength": 500 },
+        "replyToSender": { "type": "string", "maxLength": 80 },
+        "replyToType": { "type": "string", "maxLength": 32 },
+        "forwardedFromId": { "type": "string", "maxLength": 128 },
+        "fileUrl": { "type": "string", "maxLength": 1024 },
+        "fileName": { "type": "string", "maxLength": 200 },
+        "mimeType": { "type": "string", "maxLength": 120 },
+        "sizeBytes": { "type": "integer" },
+        "durationSeconds": { "type": "integer" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "isEdited": { "type": "boolean" },
+        "isDeleted": { "type": "boolean" },
+        "isPinned": { "type": "boolean" },
+        "starredBy": { "type": "array", "items": { "type": "string" } },
+        "deletedForUids": { "type": "array", "items": { "type": "string" } },
+        "reactions": { "type": "array", "items": { "type": "object" } },
+        "deliveredAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "readAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "expiresAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "conversationId", "senderUid", "content", "messageType", "isDeleted", "createdAt", "updatedAt"]
     },
@@ -405,152 +181,76 @@
       "description": "24-hour expiring status update",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Status ID"
-        },
-        "authorUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Author Firebase Auth UID"
-        },
-        "mediaType": {
-          "type": "string",
-          "enum": ["text", "image", "video"],
-          "description": "Status media type"
-        },
-        "content": {
-          "type": "string",
-          "maxLength": 1000,
-          "description": "Status text content"
-        },
-        "mediaUrl": {
-          "type": "string",
-          "maxLength": 512,
-          "description": "Optional status media URL"
-        },
-        "caption": {
-          "type": "string",
-          "maxLength": 300,
-          "description": "Status caption"
-        },
-        "backgroundColor": {
-          "type": "string",
-          "maxLength": 32,
-          "description": "Status card background color"
-        },
-        "expiresAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "24-hour expiration timestamp"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        }
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mediaType": { "type": "string", "enum": ["text", "image", "video"] },
+        "content": { "type": "string", "maxLength": 1000 },
+        "mediaUrl": { "type": "string", "maxLength": 1024 },
+        "caption": { "type": "string", "maxLength": 300 },
+        "backgroundColor": { "type": "string", "maxLength": 32 },
+        "privacy": { "type": "string", "enum": ["everyone", "friends", "contacts", "selected"] },
+        "expiresAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "authorUid", "mediaType", "expiresAt", "createdAt"]
     },
-    "CallRecord": {
-      "title": "CallRecord",
-      "description": "1-to-1 voice or video call log",
+    "StatusView": {
+      "title": "StatusView",
+      "description": "Status view and reaction record",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Call ID"
-        },
-        "callerUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Caller Firebase Auth UID"
-        },
-        "calleeUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Callee Firebase Auth UID"
-        },
-        "callType": {
-          "type": "string",
-          "enum": ["voice", "video"],
-          "description": "Call type"
-        },
-        "status": {
-          "type": "string",
-          "enum": ["ringing", "connected", "ended", "missed", "rejected"],
-          "description": "Call state"
-        },
-        "startedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Call start timestamp"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Last call update timestamp"
-        }
+        "viewerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "viewerName": { "type": "string", "maxLength": 80 },
+        "viewerAvatar": { "type": "string", "maxLength": 512 },
+        "viewerRikzenId": { "type": "string", "maxLength": 24 },
+        "reaction": { "type": "string", "maxLength": 16 },
+        "viewedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["viewerUid", "viewedAt"]
+    },
+    "CallRecord": {
+      "title": "CallRecord",
+      "description": "1-to-1 WebRTC voice or video call record and SDP signaling state",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "callerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "calleeUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "callType": { "type": "string", "enum": ["voice", "video"] },
+        "status": { "type": "string", "enum": ["ringing", "connected", "ended", "missed", "rejected", "busy"] },
+        "offerSdp": { "type": "string", "maxLength": 30000 },
+        "answerSdp": { "type": "string", "maxLength": 30000 },
+        "durationSeconds": { "type": "integer" },
+        "startedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "endedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "callerUid", "calleeUid", "callType", "status", "startedAt", "updatedAt"]
+    },
+    "CallCandidate": {
+      "title": "CallCandidate",
+      "description": "WebRTC ICE candidate for a call session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "candidate": { "type": "string", "maxLength": 4000 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["id", "senderUid", "candidate", "createdAt"]
     },
     "NotificationItem": {
       "title": "NotificationItem",
       "description": "User-scoped notification item",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Notification ID"
-        },
-        "recipientUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Target user UID"
-        },
-        "title": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 120,
-          "description": "Notification title"
-        },
-        "body": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 500,
-          "description": "Notification message"
-        },
-        "isRead": {
-          "type": "boolean",
-          "description": "Read flag"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        }
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "maxLength": 40 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "recipientUid", "title", "body", "isRead", "createdAt"]
     },
@@ -559,48 +259,13 @@
       "description": "Safety and moderation report submitted by a user",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Report ID"
-        },
-        "reporterUid": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Reporter Firebase Auth UID"
-        },
-        "targetType": {
-          "type": "string",
-          "enum": ["user", "message", "group", "channel", "feedback"],
-          "description": "Target category"
-        },
-        "targetId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "description": "Target identifier"
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 1000,
-          "description": "Report reason or feedback message"
-        },
-        "status": {
-          "type": "string",
-          "enum": ["open", "resolved", "dismissed"],
-          "description": "Moderation state"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64,
-          "description": "Creation server timestamp"
-        }
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetType": { "type": "string", "enum": ["user", "message", "group", "channel", "feedback"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "reporterUid", "targetType", "targetId", "reason", "status", "createdAt"]
     }
@@ -642,9 +307,17 @@
       "schema": { "$ref": "#/entities/StatusUpdate" },
       "description": "24-hour status updates"
     },
+    "/statuses/{statusId}/views/{viewerUid}": {
+      "schema": { "$ref": "#/entities/StatusView" },
+      "description": "Status viewers and reactions"
+    },
     "/calls/{callId}": {
       "schema": { "$ref": "#/entities/CallRecord" },
-      "description": "Voice and video call records"
+      "description": "Voice and video call records and WebRTC signaling"
+    },
+    "/calls/{callId}/candidates/{candId}": {
+      "schema": { "$ref": "#/entities/CallCandidate" },
+      "description": "WebRTC ICE candidates for real peer-to-peer calling"
     },
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/NotificationItem" },

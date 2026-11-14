@@ -1,6 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, Phone, PhoneOff, RefreshCw, Video, VideoOff } from 'lucide-react';
-import { realtime } from '../services/api';
+import {
+  Maximize2,
+  Mic,
+  MicOff,
+  Minimize2,
+  Phone,
+  PhoneOff,
+  PictureInPicture2,
+  RefreshCw,
+  Video,
+  VideoOff,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import {
+  sendCallSignalFirestore,
+  subscribeCallSignalFirestore,
+} from '../lib/firebaseBackend';
+import { apiFetch, isServerlessFirebaseMode, realtime } from '../services/api';
 
 export interface ActiveCallSession {
   callId: string;
@@ -13,30 +30,74 @@ export interface ActiveCallSession {
 }
 
 interface CallOverlayProps {
+  myUid: string;
   call: ActiveCallSession;
   onUpdateStatus: (status: 'connected') => void;
   onClose: () => void;
 }
 
-export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, onClose }) => {
+function getIceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ];
+  const turnUrl = import.meta.env.VITE_TURN_URL;
+  if (turnUrl) {
+    servers.push({
+      urls: turnUrl,
+      username: import.meta.env.VITE_TURN_USERNAME || undefined,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL || undefined,
+    });
+  }
+  return servers;
+}
+
+export const CallOverlay: React.FC<CallOverlayProps> = ({
+  myUid,
+  call,
+  onUpdateStatus,
+  onClose,
+}) => {
   const [micMuted, setMicMuted] = useState(false);
   const [camOff, setCamOff] = useState(call.callType === 'voice');
+  const [speakerOn, setSpeakerOn] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [elapsed, setElapsed] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [statusNote, setStatusNote] = useState<string | null>(null);
 
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+  const elapsedRef = useRef(0);
+  const closedRef = useRef(false);
+
+  useEffect(() => {
+    elapsedRef.current = elapsed;
+  }, [elapsed]);
 
   const cleanupMedia = () => {
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
+  };
+
+  const closeWithMessage = (note: string | null) => {
+    if (closedRef.current) return;
+    closedRef.current = true;
+    cleanupMedia();
+    if (note) {
+      setStatusNote(note);
+      window.setTimeout(onClose, 1100);
+    } else {
+      onClose();
+    }
   };
 
   const setupPeerConnection = async (isCaller: boolean) => {
@@ -50,9 +111,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
         localVideoRef.current.srcObject = stream;
       }
 
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-      });
+      const pc = new RTCPeerConnection({ iceServers: getIceServers() });
       pcRef.current = pc;
 
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -69,11 +128,15 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
       };
 
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
+        if (!event.candidate) return;
+        const candJson = event.candidate.toJSON();
+        if (isServerlessFirebaseMode()) {
+          sendCallSignalFirestore(call.callId, { candidate: candJson });
+        } else {
           realtime.send('webrtc:ice-candidate', {
             targetUserId: call.peerId,
             callId: call.callId,
-            data: event.candidate.toJSON(),
+            data: candJson,
           });
         }
       };
@@ -81,11 +144,17 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
       if (isCaller) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        realtime.send('webrtc:offer', {
-          targetUserId: call.peerId,
-          callId: call.callId,
-          data: offer,
-        });
+        if (isServerlessFirebaseMode()) {
+          await sendCallSignalFirestore(call.callId, {
+            offerSdp: JSON.stringify(offer),
+          });
+        } else {
+          realtime.send('webrtc:offer', {
+            targetUserId: call.peerId,
+            callId: call.callId,
+            data: offer,
+          });
+        }
       }
 
       return pc;
@@ -95,8 +164,49 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
     }
   };
 
+  const handleRemoteOffer = async (offer: RTCSessionDescriptionInit) => {
+    const pc = pcRef.current || (await setupPeerConnection(false));
+    if (!pc) return;
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    for (const c of pendingCandidates.current) {
+      await pc.addIceCandidate(new RTCIceCandidate(c));
+    }
+    pendingCandidates.current = [];
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    if (isServerlessFirebaseMode()) {
+      await sendCallSignalFirestore(call.callId, {
+        answerSdp: JSON.stringify(answer),
+      });
+    } else {
+      realtime.send('webrtc:answer', {
+        targetUserId: call.peerId,
+        callId: call.callId,
+        data: answer,
+      });
+    }
+  };
+
+  const handleRemoteAnswer = async (answer: RTCSessionDescriptionInit) => {
+    if (pcRef.current && !pcRef.current.currentRemoteDescription) {
+      await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+      for (const c of pendingCandidates.current) {
+        await pcRef.current.addIceCandidate(new RTCIceCandidate(c));
+      }
+      pendingCandidates.current = [];
+    }
+  };
+
+  const handleRemoteCandidate = async (candidate: RTCIceCandidateInit) => {
+    if (pcRef.current && pcRef.current.remoteDescription) {
+      await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+    } else {
+      pendingCandidates.current.push(candidate);
+    }
+  };
+
   useEffect(() => {
-    if (call.direction === 'outgoing') {
+    if (call.direction === 'outgoing' && !isServerlessFirebaseMode()) {
       realtime.send('call:invite', {
         callId: call.callId,
         calleeId: call.peerId,
@@ -104,50 +214,86 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
       });
     }
 
-    const unsub = realtime.subscribe(async (event, payload) => {
+    const unsubWs = realtime.subscribe(async (event, payload) => {
       if (payload?.callId && payload.callId !== call.callId) return;
 
       if (event === 'call:accept') {
         onUpdateStatus('connected');
         await setupPeerConnection(true);
-      } else if (event === 'call:reject' || event === 'call:end') {
-        cleanupMedia();
-        onClose();
-      } else if (event === 'webrtc:offer') {
-        const pc = pcRef.current || (await setupPeerConnection(false));
-        if (!pc) return;
-        await pc.setRemoteDescription(new RTCSessionDescription(payload.data));
-        for (const c of pendingCandidates.current) {
-          await pc.addIceCandidate(new RTCIceCandidate(c));
-        }
-        pendingCandidates.current = [];
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        realtime.send('webrtc:answer', {
-          targetUserId: call.peerId,
-          callId: call.callId,
-          data: answer,
-        });
-      } else if (event === 'webrtc:answer') {
-        if (pcRef.current && payload.data) {
-          await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.data));
-        }
-      } else if (event === 'webrtc:ice-candidate') {
-        if (payload.data) {
-          if (pcRef.current && pcRef.current.remoteDescription) {
-            await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.data));
-          } else {
-            pendingCandidates.current.push(payload.data);
-          }
-        }
+      } else if (event === 'call:busy') {
+        apiFetch(`/api/calls/${call.callId}/status`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'busy' }),
+        }).catch(() => {});
+        closeWithMessage('User is busy on another call');
+      } else if (event === 'call:reject') {
+        apiFetch(`/api/calls/${call.callId}/status`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'rejected' }),
+        }).catch(() => {});
+        closeWithMessage('Call declined');
+      } else if (event === 'call:end') {
+        closeWithMessage(null);
+      } else if (event === 'webrtc:offer' && payload.data) {
+        await handleRemoteOffer(payload.data);
+      } else if (event === 'webrtc:answer' && payload.data) {
+        await handleRemoteAnswer(payload.data);
+      } else if (event === 'webrtc:ice-candidate' && payload.data) {
+        await handleRemoteCandidate(payload.data);
       }
     });
 
+    let unsubFb = () => {};
+    if (isServerlessFirebaseMode()) {
+      unsubFb = subscribeCallSignalFirestore(call.callId, myUid, {
+        onStatus: async (st) => {
+          if (st === 'connected' && call.direction === 'outgoing' && call.status === 'ringing') {
+            onUpdateStatus('connected');
+            await setupPeerConnection(true);
+          } else if (st === 'busy') {
+            closeWithMessage('User is busy on another call');
+          } else if (st === 'rejected') {
+            closeWithMessage('Call declined');
+          } else if (st === 'ended' || st === 'missed') {
+            closeWithMessage(null);
+          }
+        },
+        onOffer: (sdp) => {
+          handleRemoteOffer(sdp);
+        },
+        onAnswer: (sdp) => {
+          handleRemoteAnswer(sdp);
+        },
+        onCandidate: (cand) => {
+          handleRemoteCandidate(cand);
+        },
+      });
+    }
+
     return () => {
-      unsub();
+      unsubWs();
+      unsubFb();
       cleanupMedia();
     };
   }, [call.callId]);
+
+  // 45-second unanswered ring timeout -> Missed call
+  useEffect(() => {
+    if (call.status !== 'ringing') return;
+    const t = window.setTimeout(() => {
+      if (isServerlessFirebaseMode()) {
+        sendCallSignalFirestore(call.callId, { status: 'missed' });
+      } else {
+        apiFetch(`/api/calls/${call.callId}/status`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'missed' }),
+        }).catch(() => {});
+        realtime.send('call:end', { targetUserId: call.peerId, callId: call.callId });
+      }
+      closeWithMessage('No answer');
+    }, 45_000);
+    return () => clearTimeout(t);
+  }, [call.status, call.callId]);
 
   useEffect(() => {
     if (call.status !== 'connected') return;
@@ -158,20 +304,36 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
   const handleAcceptIncoming = async () => {
     onUpdateStatus('connected');
     await setupPeerConnection(false);
-    realtime.send('call:accept', {
-      targetUserId: call.peerId,
-      callId: call.callId,
-    });
+    if (isServerlessFirebaseMode()) {
+      await sendCallSignalFirestore(call.callId, { status: 'connected' });
+    } else {
+      realtime.send('call:accept', {
+        targetUserId: call.peerId,
+        callId: call.callId,
+      });
+    }
   };
 
   const handleRejectOrEnd = () => {
-    const evt = call.direction === 'incoming' && call.status === 'ringing' ? 'call:reject' : 'call:end';
-    realtime.send(evt, {
-      targetUserId: call.peerId,
-      callId: call.callId,
-    });
-    cleanupMedia();
-    onClose();
+    const isIncomingRinging = call.direction === 'incoming' && call.status === 'ringing';
+    const nextStatus = isIncomingRinging ? 'rejected' : elapsedRef.current > 0 ? 'ended' : 'missed';
+
+    if (isServerlessFirebaseMode()) {
+      sendCallSignalFirestore(call.callId, {
+        status: nextStatus,
+        durationSeconds: elapsedRef.current,
+      });
+    } else {
+      realtime.send(isIncomingRinging ? 'call:reject' : 'call:end', {
+        targetUserId: call.peerId,
+        callId: call.callId,
+      });
+      apiFetch(`/api/calls/${call.callId}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: nextStatus, durationSeconds: elapsedRef.current }),
+      }).catch(() => {});
+    }
+    closeWithMessage(null);
   };
 
   const toggleMic = () => {
@@ -180,6 +342,17 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
       t.enabled = !next;
     });
     setMicMuted(next);
+  };
+
+  const toggleSpeaker = () => {
+    const next = !speakerOn;
+    setSpeakerOn(next);
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !next;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.muted = !next;
+    }
   };
 
   const toggleCamera = () => {
@@ -212,6 +385,26 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
     }
   };
 
+  const toggleFullscreen = async () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      await containerRef.current.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      await document.exitFullscreen().catch(() => {});
+      setIsFullscreen(false);
+    }
+  };
+
+  const togglePiP = async () => {
+    if (!remoteVideoRef.current || !document.pictureInPictureEnabled) return;
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture().catch(() => {});
+    } else {
+      await remoteVideoRef.current.requestPictureInPicture().catch(() => {});
+    }
+  };
+
   const fmtTime = (secs: number) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
@@ -219,27 +412,55 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-[#09090B]/95 p-6 text-white backdrop-blur-md">
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-[#09090B]/95 p-6 text-white backdrop-blur-md"
+    >
       <audio ref={remoteAudioRef} autoPlay />
 
-      {/* Top info */}
-      <div className="mt-6 text-center">
-        <p className="text-xs uppercase tracking-[0.22em] text-[#D4AF37]">
-          RIKZEN {call.callType === 'video' ? 'Video Call' : 'Voice Call'}
-        </p>
-        <h2 className="mt-2 font-display text-2xl font-bold">{call.peerName}</h2>
-        <p className="mt-1 text-sm tabular-nums text-[#9898A6]">
-          {call.status === 'connected'
-            ? fmtTime(elapsed)
-            : call.direction === 'incoming'
-            ? 'Incoming call...'
-            : 'Ringing...'}
-        </p>
-        {mediaError && (
-          <p className="mt-3 max-w-sm rounded-xl border border-red-500/30 bg-red-500/15 px-4 py-2 text-xs text-red-300">
-            {mediaError}
+      {/* Top info & screen mode buttons */}
+      <div className="mt-4 flex w-full max-w-3xl items-start justify-between">
+        <div className="w-20" />
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-[0.22em] text-[#D4AF37]">
+            RIKZEN {call.callType === 'video' ? 'Video Call' : 'Voice Call'}
           </p>
-        )}
+          <h2 className="mt-2 font-display text-2xl font-bold">{call.peerName}</h2>
+          <p className="mt-1 text-sm tabular-nums text-[#9898A6]">
+            {statusNote
+              ? statusNote
+              : call.status === 'connected'
+              ? fmtTime(elapsed)
+              : call.direction === 'incoming'
+              ? 'Incoming call...'
+              : 'Ringing...'}
+          </p>
+          {mediaError && (
+            <p className="mt-3 max-w-sm rounded-xl border border-red-500/30 bg-red-500/15 px-4 py-2 text-xs text-red-300">
+              {mediaError}
+            </p>
+          )}
+        </div>
+        <div className="flex w-20 justify-end gap-1.5">
+          {call.callType === 'video' && call.status === 'connected' && document.pictureInPictureEnabled && (
+            <button
+              type="button"
+              onClick={togglePiP}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white"
+              title="Picture-in-Picture"
+            >
+              <PictureInPicture2 size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white"
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+        </div>
       </div>
 
       {/* Video Stage or Avatar */}
@@ -271,7 +492,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
       </div>
 
       {/* Controls */}
-      <div className="mb-6 flex items-center gap-4">
+      <div className="mb-6 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
         {call.direction === 'incoming' && call.status === 'ringing' ? (
           <>
             <button
@@ -302,6 +523,17 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({ call, onUpdateStatus, 
               aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
             >
               {micMuted ? <MicOff size={20} /> : <Mic size={20} />}
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleSpeaker}
+              className={`flex h-14 w-14 items-center justify-center rounded-full border transition ${
+                speakerOn ? 'border-[#D4AF37]/50 bg-[#D4AF37]/20 text-[#F5E6B3]' : 'border-white/15 bg-white/10 text-white'
+              }`}
+              aria-label={speakerOn ? 'Mute speaker' : 'Enable speaker'}
+            >
+              {speakerOn ? <Volume2 size={20} /> : <VolumeX size={20} />}
             </button>
 
             {call.callType === 'video' && (
