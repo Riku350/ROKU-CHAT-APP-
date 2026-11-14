@@ -156,7 +156,7 @@ service cloud.firestore {
         isValidId(data.authorUid) &&
         data.mediaType is string && data.mediaType in ['text', 'image', 'video'] &&
         (!('content' in data) || (data.content is string && data.content.size() <= 1000)) &&
-        (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 512)) &&
+        (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 1024)) &&
         (!('caption' in data) || (data.caption is string && data.caption.size() <= 300)) &&
         (!('backgroundColor' in data) || (data.backgroundColor is string && data.backgroundColor.size() <= 32)) &&
         data.expiresAt is timestamp &&
@@ -445,7 +445,10 @@ service cloud.firestore {
 
     match /statuses/{statusId} {
       allow get: if isValidId(statusId) && isSignedIn();
-      allow list: if isSignedIn() && resource.data.expiresAt > request.time;
+      allow list: if isSignedIn() &&
+        resource.data.mediaType in ['text', 'image', 'video'] &&
+        resource.data.expiresAt is timestamp &&
+        resource.data.authorUid is string;
       allow create: if isVerified() &&
         isValidId(statusId) &&
         isValidStatusUpdate(incoming()) &&

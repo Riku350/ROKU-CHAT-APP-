@@ -597,7 +597,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                     </div>
                     {c.type === 'direct' && c.peer?.isOnline && (
                       <span
-                        className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#0E0E12] bg-[#22C55E]"
+                        className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-white dark:border-[#0E0E12] bg-[#22C55E] shadow-[0_0_8px_rgba(34,197,94,0.85)]"
                         aria-label="Online"
                       />
                     )}
@@ -605,7 +605,14 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-semibold">{c.title}</p>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <p className="truncate text-sm font-semibold">{c.title}</p>
+                        {c.type === 'direct' && c.peer?.isOnline && (
+                          <span className="shrink-0 text-[11px] font-semibold text-[#22C55E]">
+                            Online
+                          </span>
+                        )}
+                      </div>
                       <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
                         {c.lastMessage
                           ? new Date(c.lastMessage.createdAt).toLocaleTimeString([], {
@@ -683,24 +690,35 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 >
                   <ChevronLeft size={22} />
                 </button>
-                <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full border border-[#D4AF37]/40 bg-[#09090B]">
-                  {activeConv.avatarUrl ? (
-                    <img src={activeConv.avatarUrl} alt={activeConv.title} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center font-bold text-[#D4AF37]">
-                      {activeConv.title.charAt(0).toUpperCase()}
-                    </div>
+                <div className="relative h-10 w-10 shrink-0">
+                  <div className="h-full w-full overflow-hidden rounded-full border border-[#D4AF37]/40 bg-[#09090B]">
+                    {activeConv.avatarUrl ? (
+                      <img src={activeConv.avatarUrl} alt={activeConv.title} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center font-bold text-[#D4AF37]">
+                        {activeConv.title.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  {activeConv.type === 'direct' && activeConv.peer?.isOnline && (
+                    <span
+                      className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white dark:border-[#111115] bg-[#22C55E] shadow-[0_0_8px_rgba(34,197,94,0.85)]"
+                      aria-label="Online"
+                    />
                   )}
                 </div>
                 <div className="min-w-0">
                   <h3 className="truncate font-semibold text-sm">{activeConv.title}</h3>
                   <p className="truncate text-xs text-slate-500 dark:text-[#9898A6]">
                     {isPeerTyping ? (
-                      <span className="text-[#22C55E] font-medium">typing...</span>
+                      <span className="text-[#22C55E] font-semibold">typing...</span>
                     ) : activeConv.type === 'group' ? (
                       `${activeConv.memberCount} members`
                     ) : activeConv.peer?.isOnline ? (
-                      <span className="text-[#22C55E]">Online</span>
+                      <span className="inline-flex items-center gap-1.5 font-semibold text-[#22C55E]">
+                        <span className="h-2 w-2 rounded-full bg-[#22C55E]" />
+                        Online
+                      </span>
                     ) : activeConv.peer?.lastSeenAt ? (
                       `Last seen ${new Date(activeConv.peer.lastSeenAt).toLocaleTimeString([], {
                         hour: '2-digit',
@@ -1316,19 +1334,33 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           </div>
 
           <div className="mt-5 flex flex-col items-center text-center">
-            <div className="h-24 w-24 overflow-hidden rounded-full border-2 border-[#D4AF37]">
-              {activeConv.avatarUrl ? (
-                <img src={activeConv.avatarUrl} alt={activeConv.title} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center bg-[#18181D] font-display text-3xl font-bold text-[#D4AF37]">
-                  {activeConv.title.charAt(0).toUpperCase()}
-                </div>
+            <div className="relative h-24 w-24">
+              <div className="h-full w-full overflow-hidden rounded-full border-2 border-[#D4AF37]">
+                {activeConv.avatarUrl ? (
+                  <img src={activeConv.avatarUrl} alt={activeConv.title} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-[#18181D] font-display text-3xl font-bold text-[#D4AF37]">
+                    {activeConv.title.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              {activeConv.type === 'direct' && activeConv.peer?.isOnline && (
+                <span
+                  className="absolute bottom-1 right-1 h-4 w-4 rounded-full border-2 border-white dark:border-[#111115] bg-[#22C55E] shadow-[0_0_8px_rgba(34,197,94,0.85)]"
+                  aria-label="Online"
+                />
               )}
             </div>
             <h5 className="mt-3 font-display text-lg font-bold">{activeConv.title}</h5>
             {activeConv.peer && (
               <>
                 <p className="font-mono-id text-xs text-[#D4AF37] mt-0.5">{activeConv.peer.rikzenId}</p>
+                {activeConv.peer.isOnline && (
+                  <p className="mt-1 inline-flex items-center gap-1.5 text-xs font-semibold text-[#22C55E]">
+                    <span className="h-2 w-2 rounded-full bg-[#22C55E]" />
+                    Online
+                  </p>
+                )}
                 {activeConv.peer.bio && (
                   <p className="mt-2 text-xs text-slate-500 dark:text-[#9898A6]">{activeConv.peer.bio}</p>
                 )}

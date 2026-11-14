@@ -90,6 +90,59 @@ export function sanitizeAvatarUrl(url: string | null | undefined): string | null
   return url;
 }
 
+export function sanitizeMediaUrl(url: string | null | undefined): string | null {
+  if (!url || typeof url !== 'string') return null;
+  if (url.startsWith('data:') || url.length > 1024) return null;
+  return url;
+}
+
+export async function setPresenceFirestore(isOnline: boolean): Promise<void> {
+  const fbUser = firebaseAuth.currentUser;
+  if (!fbUser || !fbUser.emailVerified) return;
+  const path = `publicProfiles/${fbUser.uid}`;
+  try {
+    await updateDoc(doc(db, 'publicProfiles', fbUser.uid), {
+      isOnline,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    // Only log/ignore if doc doesn't exist yet; otherwise report through handleFirestoreError
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!msg.includes('No document to update')) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  }
+}
+
+export function subscribePeerProfilesFirestore(
+  peerUids: string[],
+  onUpdate: (uid: string, isOnline: boolean, updatedAt: string) => void
+): Unsubscribe {
+  const uniqueUids = Array.from(new Set(peerUids.filter(Boolean)));
+  const unsubs = uniqueUids.map((uid) => {
+    const path = `publicProfiles/${uid}`;
+    return onSnapshot(
+      doc(db, 'publicProfiles', uid),
+      (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        const updatedIso =
+          typeof d.updatedAt?.toDate === 'function'
+            ? d.updatedAt.toDate().toISOString()
+            : new Date().toISOString();
+        onUpdate(uid, Boolean(d.isOnline), updatedIso);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, path);
+      }
+    );
+  });
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}
+
 export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
   const fbUser = firebaseAuth.currentUser;
   if (!fbUser || !fbUser.emailVerified || !fbUser.email) {

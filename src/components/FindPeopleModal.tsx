@@ -42,6 +42,19 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
 
+  const formatErr = (err: any) => {
+    const raw = err?.message || 'Action failed. Please try again.';
+    if (typeof raw === 'string' && raw.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed.error || raw;
+      } catch {
+        return raw;
+      }
+    }
+    return raw;
+  };
+
   const loadFriendsData = async () => {
     try {
       const data = await apiFetch('/api/friends');
@@ -50,8 +63,8 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
       setSent(data.sentRequests || []);
       setRejected(data.rejectedRequests || []);
       setBlocked(data.blockedUsers || []);
-    } catch {
-      // ignore
+    } catch (err: any) {
+      setStatusMsg(formatErr(err));
     }
   };
 
@@ -73,7 +86,7 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
       );
       setResults(data.results || []);
     } catch (err: any) {
-      setStatusMsg(err.message);
+      setStatusMsg(formatErr(err));
     } finally {
       setSearching(false);
     }
@@ -90,7 +103,7 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
       await Promise.all([handleSearch(), loadFriendsData()]);
       onRefreshData();
     } catch (err: any) {
-      setStatusMsg(err.message);
+      setStatusMsg(formatErr(err));
     }
   };
 
@@ -101,13 +114,22 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
         method: 'POST',
         body: JSON.stringify({ requestId, action }),
       });
-      await loadFriendsData();
+      await Promise.all([
+        loadFriendsData(),
+        query.trim().length >= 2 ? handleSearch() : Promise.resolve(),
+      ]);
       onRefreshData();
-      if (action === 'accept' && res.conversationId) {
-        setStatusMsg('Friend request accepted! Personal chat unlocked.');
+      if (action === 'accept') {
+        setStatusMsg(
+          res.conversationId
+            ? 'Friend request accepted! Personal chat unlocked.'
+            : 'Friend request accepted!'
+        );
+      } else {
+        setStatusMsg(action === 'block' ? 'User blocked.' : 'Friend request rejected.');
       }
     } catch (err: any) {
-      setStatusMsg(err.message);
+      setStatusMsg(formatErr(err));
     }
   };
 
@@ -121,7 +143,7 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
       onStartChat(res.conversationId);
       onClose();
     } catch (err: any) {
-      setStatusMsg(err.message);
+      setStatusMsg(formatErr(err));
     }
   };
 
@@ -281,17 +303,30 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
                     className="flex items-center justify-between gap-3 rounded-xl border border-black/8 dark:border-white/10 bg-slate-50/70 dark:bg-[#18181D] p-3.5"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-[#D4AF37]/40 bg-[#09090B]">
-                        {u.avatarUrl ? (
-                          <img src={u.avatarUrl} alt={u.fullName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center font-display text-base font-bold text-[#D4AF37]">
-                            {u.fullName.charAt(0).toUpperCase()}
-                          </div>
+                      <div className="relative h-12 w-12 shrink-0">
+                        <div className="h-full w-full overflow-hidden rounded-full border border-[#D4AF37]/40 bg-[#09090B]">
+                          {u.avatarUrl ? (
+                            <img src={u.avatarUrl} alt={u.fullName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center font-display text-base font-bold text-[#D4AF37]">
+                              {u.fullName.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        {u.isOnline && (
+                          <span
+                            className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-white dark:border-[#18181D] bg-[#22C55E]"
+                            aria-label="Online"
+                          />
                         )}
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate font-semibold text-sm">{u.fullName}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-semibold text-sm">{u.fullName}</p>
+                          {u.isOnline && (
+                            <span className="shrink-0 text-[11px] font-semibold text-[#22C55E]">Online</span>
+                          )}
+                        </div>
                         <p className="font-mono-id text-xs text-[#B8891F] dark:text-[#D4AF37]">{u.rikzenId}</p>
                         {u.bio && <p className="truncate text-xs text-slate-500 dark:text-[#9898A6] mt-0.5">{u.bio}</p>}
                       </div>
@@ -424,17 +459,30 @@ export const FindPeopleModal: React.FC<FindPeopleModalProps> = ({
                     className="flex items-center justify-between gap-3 rounded-xl border border-black/8 dark:border-white/10 bg-slate-50/70 dark:bg-[#18181D] p-3.5"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full border border-[#D4AF37]/40 bg-[#09090B]">
-                        {f.avatarUrl ? (
-                          <img src={f.avatarUrl} alt={f.fullName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center font-bold text-[#D4AF37]">
-                            {f.fullName.charAt(0).toUpperCase()}
-                          </div>
+                      <div className="relative h-11 w-11 shrink-0">
+                        <div className="h-full w-full overflow-hidden rounded-full border border-[#D4AF37]/40 bg-[#09090B]">
+                          {f.avatarUrl ? (
+                            <img src={f.avatarUrl} alt={f.fullName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center font-bold text-[#D4AF37]">
+                              {f.fullName.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        {f.isOnline && (
+                          <span
+                            className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white dark:border-[#18181D] bg-[#22C55E]"
+                            aria-label="Online"
+                          />
                         )}
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate font-semibold text-sm">{f.fullName}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-semibold text-sm">{f.fullName}</p>
+                          {f.isOnline && (
+                            <span className="shrink-0 text-[11px] font-semibold text-[#22C55E]">Online</span>
+                          )}
+                        </div>
                         <p className="font-mono-id text-xs text-[#D4AF37]">{f.rikzenId}</p>
                       </div>
                     </div>

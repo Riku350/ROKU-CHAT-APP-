@@ -24,8 +24,20 @@ import { UpdatesView } from './components/UpdatesView';
 import { WelcomeSplash } from './components/WelcomeSplash';
 import { onAuthStateChanged } from 'firebase/auth';
 import { firebaseAuth, signOutGoogle } from './lib/firebaseAuth';
-import { subscribeOwnPublicProfile, syncUserToFirestore, testConnection } from './lib/firestore';
-import { apiFetch, realtime, setStoredToken, triggerDesktopNotification } from './services/api';
+import {
+  setPresenceFirestore,
+  subscribeOwnPublicProfile,
+  subscribePeerProfilesFirestore,
+  syncUserToFirestore,
+  testConnection,
+} from './lib/firestore';
+import {
+  apiFetch,
+  isServerlessFirebaseMode,
+  realtime,
+  setStoredToken,
+  triggerDesktopNotification,
+} from './services/api';
 import type { AppNotification, ConversationSummary, UserProfile } from './types/rikzen';
 
 type MainTab = 'chats' | 'updates' | 'communities' | 'calls';
@@ -125,6 +137,50 @@ export default function App() {
       });
   }, []);
 
+  // Keep Firebase online presence live when app is open/hidden/closed
+  useEffect(() => {
+    if (!firebaseReady || !firebaseUid || !me?.onboardingCompleted) return;
+    setPresenceFirestore(true).catch(() => {});
+
+    const onVisibility = () => {
+      setPresenceFirestore(document.visibilityState === 'visible').catch(() => {});
+    };
+    const onPageHide = () => {
+      setPresenceFirestore(false).catch(() => {});
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+    };
+  }, [firebaseReady, firebaseUid, me?.onboardingCompleted]);
+
+  // Subscribe live to peers' online/offline status in Firebase serverless mode
+  const peerIdsKey = conversations
+    .map((c) => c.peer?.id || '')
+    .filter(Boolean)
+    .sort()
+    .join(',');
+
+  useEffect(() => {
+    if (!firebaseReady || !firebaseUid || !isServerlessFirebaseMode() || !peerIdsKey) return;
+    const peerIds = peerIdsKey.split(',').filter(Boolean);
+    const unsub = subscribePeerProfilesFirestore(peerIds, (uid, isOnline, updatedAt) => {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.peer && c.peer.id === uid
+            ? { ...c, peer: { ...c.peer, isOnline, lastSeenAt: updatedAt } }
+            : c
+        )
+      );
+    });
+    return () => unsub();
+  }, [firebaseReady, firebaseUid, peerIdsKey]);
+
   // Connect WebSocket & load workspace when authenticated & onboarded
   useEffect(() => {
     if (!me || !me.onboardingCompleted) return;
@@ -137,6 +193,21 @@ export default function App() {
         const notif = payload as AppNotification;
         setNotifications((prev) => [notif, ...prev]);
         triggerDesktopNotification(notif.title, notif.body);
+      } else if (event === 'presence:update') {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.peer && c.peer.id === payload.userId
+              ? {
+                  ...c,
+                  peer: {
+                    ...c.peer,
+                    isOnline: Boolean(payload.isOnline),
+                    lastSeenAt: payload.lastSeenAt || c.peer.lastSeenAt,
+                  },
+                }
+              : c
+          )
+        );
       } else if (event === 'call:incoming') {
         setActiveCall({
           callId: payload.callId,
@@ -157,6 +228,7 @@ export default function App() {
   }, [me?.id, me?.onboardingCompleted, loadConversations, loadNotifications]);
 
   const handleLogout = async () => {
+    await setPresenceFirestore(false).catch(() => {});
     await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     await signOutGoogle();
     setStoredToken(null);
