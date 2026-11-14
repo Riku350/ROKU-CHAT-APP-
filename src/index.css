@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --rikzen-bg: #f8f7f4;
+    --rikzen-surface: #ffffff;
+    --rikzen-surface-elevated: #f1efe9;
+    --rikzen-border: rgba(15, 15, 18, 0.08);
+    --rikzen-text: #121215;
+    --rikzen-text-muted: #5c5c66;
+    --rikzen-gold: #b8891f;
+    --rikzen-gold-soft: rgba(184, 137, 31, 0.14);
+    --rikzen-green: #15803d;
+    --rikzen-accent: #b8891f;
+    --rikzen-font-scale: 1;
+  }
+
+  .dark {
+    --rikzen-bg: #09090b;
+    --rikzen-surface: #111115;
+    --rikzen-surface-elevated: #18181d;
+    --rikzen-border: rgba(212, 175, 55, 0.14);
+    --rikzen-text: #f5f5f7;
+    --rikzen-text-muted: #9898a6;
+    --rikzen-gold: #d4af37;
+    --rikzen-gold-soft: rgba(212, 175, 55, 0.16);
+    --rikzen-green: #22c55e;
+    --rikzen-accent: #d4af37;
+  }
+
+  html {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-size: calc(16px * var(--rikzen-font-scale, 1));
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--rikzen-bg);
+    color: var(--rikzen-text);
+    overflow-x: hidden;
+  }
+}
+
+.font-display {
+  font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+.font-mono-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.22);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.42);
+}
+
+/* Safe area bottom padding for mobile */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@keyframes goldShimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.rikzen-gold-text {
+  background: linear-gradient(120deg, #b8891f 0%, #f5e6b3 45%, #d4af37 70%, #f5e6b3 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: goldShimmer 5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rikzen-gold-text {
+    animation: none;
+  }
+}

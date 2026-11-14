@@ -1,0 +1,6 @@
+{
+  "name": "RIKZEN CHAT",
+  "description": "CONNECT • CHAT • SHARE — A luxury full-stack messaging platform with real-time chat, WebRTC calls, groups, statuses, communities, and channels.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
