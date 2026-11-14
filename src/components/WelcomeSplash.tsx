@@ -197,23 +197,21 @@ export const WelcomeSplash: React.FC<WelcomeSplashProps> = ({ onComplete }) => {
           </motion.p>
         </div>
 
-        {/* Subtle progress bar & skip */}
-        <div className="absolute bottom-8 flex flex-col items-center gap-3">
-          <div className="h-[2px] w-40 overflow-hidden rounded-full bg-white/10">
-            <motion.div
-              initial={{ scaleX: 0 }}
-              animate={{ scaleX: 1 }}
-              transition={{ duration: reducedMotion ? 1.4 : 5, ease: 'linear' }}
-              className="h-full w-full origin-left bg-gradient-to-r from-[#9C7316] via-[#F5E6B3] to-[#22C55E]"
-            />
+        {/* Dedicated bottom progress & brand bar (no skip button) */}
+        <div className="absolute inset-x-0 bottom-0 border-t border-[#D4AF37]/15 bg-[#08080B]/90 px-6 py-5 backdrop-blur-sm">
+          <div className="mx-auto flex max-w-md flex-col items-center gap-2.5">
+            <div className="h-[2px] w-44 overflow-hidden rounded-full bg-white/10">
+              <motion.div
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                transition={{ duration: reducedMotion ? 1.4 : 5, ease: 'linear' }}
+                className="h-full w-full origin-left bg-gradient-to-r from-[#9C7316] via-[#F5E6B3] to-[#22C55E]"
+              />
+            </div>
+            <p className="text-[11px] font-medium tracking-[0.26em] text-[#9898A6] uppercase">
+              RIKZEN • PRIVATE MESSAGING
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={onComplete}
-            className="min-h-[44px] px-4 text-xs font-medium text-[#9898A6] transition-colors hover:text-[#F5E6B3] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#D4AF37]"
-          >
-            Skip Intro
-          </button>
         </div>
       </motion.div>
     </AnimatePresence>

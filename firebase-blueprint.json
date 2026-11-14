@@ -1,0 +1,427 @@
+{
+  "entities": {
+    "ConnectionTest": {
+      "title": "ConnectionTest",
+      "description": "Bootstrap connectivity verification document",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "Indicates Firestore connectivity check passed"
+        },
+        "checkedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Timestamp of check"
+        }
+      },
+      "required": ["ok", "checkedAt"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Trusted administrator marker document",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the administrator"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160,
+          "description": "Administrator verified email address"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Server timestamp when admin access was granted"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Publicly discoverable RIKZEN CHAT identity without private PII",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID"
+        },
+        "rikzenId": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 24,
+          "pattern": "^RIKZEN-[A-Z0-9]{4,12}$",
+          "description": "Permanent unique RIKZEN User ID"
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display full name"
+        },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Profile picture URL"
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 220,
+          "description": "Public profile bio"
+        },
+        "onboardingCompleted": {
+          "type": "boolean",
+          "description": "Whether onboarding is complete"
+        },
+        "isOnline": {
+          "type": "boolean",
+          "description": "Current presence flag"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": ["uid", "rikzenId", "fullName", "onboardingCompleted", "createdAt", "updatedAt"]
+    },
+    "UserPrivateProfile": {
+      "title": "UserPrivateProfile",
+      "description": "Private PII and personal preferences accessible strictly by owner or admin",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID"
+        },
+        "rikzenId": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 24,
+          "pattern": "^RIKZEN-[A-Z0-9]{4,12}$",
+          "description": "Permanent unique RIKZEN User ID"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160,
+          "description": "Private verified email"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Private phone number"
+        },
+        "dateOfBirth": {
+          "type": "string",
+          "maxLength": 24,
+          "description": "Optional date of birth"
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["dark", "light", "system"],
+          "description": "Preferred UI theme"
+        },
+        "wallpaper": {
+          "type": "string",
+          "enum": ["obsidian-web", "midnight", "emerald-silk", "champagne-mist"],
+          "description": "Chat wallpaper selection"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Update server timestamp"
+        }
+      },
+      "required": ["uid", "rikzenId", "email", "createdAt", "updatedAt"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Cross-user friend connection request",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Request document ID"
+        },
+        "senderUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Sender Firebase Auth UID"
+        },
+        "receiverUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Receiver Firebase Auth UID"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "rejected"],
+          "description": "Current friend request state"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Last state change server timestamp"
+        }
+      },
+      "required": ["id", "senderUid", "receiverUid", "status", "createdAt", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Direct or group chat room header",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Conversation ID"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["direct", "group"],
+          "description": "Conversation type"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Conversation or group title"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner UID who created the conversation"
+        },
+        "lastMessageText": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Latest message preview"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Last message server timestamp"
+        }
+      },
+      "required": ["id", "type", "title", "createdBy", "createdAt", "updatedAt"]
+    },
+    "ConversationMember": {
+      "title": "ConversationMember",
+      "description": "Membership record inside a conversation subcollection",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Member Firebase Auth UID"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "admin", "member"],
+          "description": "Member role inside conversation"
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Membership creation timestamp"
+        }
+      },
+      "required": ["uid", "role", "joinedAt"]
+    },
+    "ConversationMessage": {
+      "title": "ConversationMessage",
+      "description": "Real-time message stored inside a conversation",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Message ID"
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent conversation ID"
+        },
+        "senderUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Author Firebase Auth UID"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "Message body"
+        },
+        "messageType": {
+          "type": "string",
+          "enum": ["text", "image", "video", "document", "audio", "voice", "location", "system"],
+          "description": "Message kind"
+        },
+        "isDeleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Last update server timestamp"
+        }
+      },
+      "required": ["id", "conversationId", "senderUid", "content", "messageType", "isDeleted", "createdAt", "updatedAt"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "User-scoped notification item",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Notification ID"
+        },
+        "recipientUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target user UID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Notification title"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Notification message"
+        },
+        "isRead": {
+          "type": "boolean",
+          "description": "Read flag"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        }
+      },
+      "required": ["id", "recipientUid", "title", "body", "isRead", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/test/connection": {
+      "schema": { "$ref": "#/entities/ConnectionTest" },
+      "description": "Health and connectivity check document"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Trusted administrator directory"
+    },
+    "/publicProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Non-PII public discovery profile keyed by Firebase UID"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPrivateProfile" },
+      "description": "Private PII and account preferences strictly isolated to owner and admins"
+    },
+    "/friendRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/FriendRequest" },
+      "description": "Friend connection requests between verified users"
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Conversation metadata records"
+    },
+    "/conversations/{conversationId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/ConversationMember" },
+      "description": "Conversation membership subcollection (Master Gate)"
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ConversationMessage" },
+      "description": "Conversation messages gated by parent membership subcollection"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "User-owned notifications"
+    }
+  }
+}

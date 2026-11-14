@@ -3,6 +3,7 @@
   "appId": "1:520738786152:web:7da243116ccd5f215d24dd",
   "apiKey": "AIzaSyAUdSNfyz7EmmiRuMgH10BGiYuSj-Je5r0",
   "authDomain": "gen-lang-client-0753713496.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-rikzenchat-f0923037-58fa-4dda-81b5-f8fc65f341e6",
   "storageBucket": "gen-lang-client-0753713496.firebasestorage.app",
   "messagingSenderId": "520738786152",
   "measurementId": "",

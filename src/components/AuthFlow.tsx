@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowRight, Camera, Check, Copy, Eye, EyeOff, KeyRound, Mail, ShieldCheck, Sparkles, UserCheck } from 'lucide-react';
+import { ArrowRight, Camera, Check, Copy, Eye, EyeOff, KeyRound, Lock, Mail, MessageSquare, PhoneCall, ShieldCheck, Sparkles, UserCheck, Users } from 'lucide-react';
 import { signInWithGooglePopup } from '../lib/firebaseAuth';
 import { isSupabaseConfigured, supabase } from '../lib/supabaseClient';
 import { apiFetch, setStoredToken } from '../services/api';
@@ -190,7 +190,8 @@ export const AuthFlow: React.FC<AuthFlowProps> = ({ initialProfile, onAuthentica
   };
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-[#F5F5F7] flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-[#09090B] text-[#F5F5F7] flex flex-col">
+      <div className="flex flex-1 flex-col lg:flex-row">
       {/* Left Brand Showcase on Desktop */}
       <div className="hidden lg:flex lg:w-1/2 flex-col justify-between border-r border-[#D4AF37]/15 bg-[#0C0C0F] p-12 relative overflow-hidden">
         <div
@@ -640,6 +641,67 @@ export const AuthFlow: React.FC<AuthFlowProps> = ({ initialProfile, onAuthentica
           )}
         </div>
       </div>
+      </div>
+
+      {/* Dedicated Separate Bottom Section */}
+      <footer className="border-t border-[#D4AF37]/15 bg-[#0B0B0E] px-5 py-8 sm:px-10">
+        <div className="mx-auto max-w-6xl">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-white/8 bg-[#111115] p-4">
+              <div className="flex items-center gap-2.5 text-[#D4AF37]">
+                <ShieldCheck size={18} />
+                <h3 className="font-display text-sm font-semibold text-white">Permanent RIKZEN ID</h3>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-[#9898A6]">
+                Find and connect with friends securely using your unique RIKZEN ID without exposing private emails.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/8 bg-[#111115] p-4">
+              <div className="flex items-center gap-2.5 text-[#22C55E]">
+                <MessageSquare size={18} />
+                <h3 className="font-display text-sm font-semibold text-white">Real-Time Messaging</h3>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-[#9898A6]">
+                Instant personal & group chats with live typing, delivery ticks, replies, voice notes, and media sharing.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/8 bg-[#111115] p-4">
+              <div className="flex items-center gap-2.5 text-[#F5E6B3]">
+                <Users size={18} />
+                <h3 className="font-display text-sm font-semibold text-white">Updates & Communities</h3>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-[#9898A6]">
+                Share 24-hour status updates, follow verified channels, and organize announcement communities.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/8 bg-[#111115] p-4">
+              <div className="flex items-center gap-2.5 text-[#D4AF37]">
+                <PhoneCall size={18} />
+                <h3 className="font-display text-sm font-semibold text-white">Voice & Video Calls</h3>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-[#9898A6]">
+                Direct 1-to-1 WebRTC voice and HD video calls with call history and privacy controls built in.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-white/8 pt-5 text-xs text-[#9898A6] sm:flex-row">
+            <div className="flex items-center gap-2">
+              <SpiderEmblem size={18} />
+              <span className="font-display font-semibold tracking-[0.14em] text-[#F5E6B3]">RIKZEN CHAT</span>
+              <span>·</span>
+              <span>CONNECT • CHAT • SHARE</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Lock size={13} className="text-[#22C55E]" />
+              <span>Privacy-First Architecture · Multi-Device Ready</span>
+            </div>
+          </div>
+        </div>
+      </footer>
 
       {cropperOpen && (
         <AvatarCropperModal

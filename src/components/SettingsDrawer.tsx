@@ -240,7 +240,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     { id: 'account', label: 'Account', sub: 'Password, email, phone, delete account', icon: <KeyRound size={18} /> },
     { id: 'privacy', label: 'Privacy', sub: 'Last seen, photo, discovery, read receipts', icon: <Lock size={18} /> },
     { id: 'security', label: 'Security', sub: 'Active sessions & account protection', icon: <Shield size={18} /> },
-    { id: 'chats', label: 'Chats', sub: 'Chat behavior & Supabase cloud status', icon: <MessageSquare size={18} /> },
+    { id: 'chats', label: 'Chats', sub: 'Chat behavior & real-time cloud sync', icon: <MessageSquare size={18} /> },
     { id: 'appearance', label: 'Appearance', sub: 'Theme, wallpaper, accent color, font size', icon: <Palette size={18} /> },
     { id: 'notifications', label: 'Notifications', sub: 'Message, call, group & status alerts', icon: <Bell size={18} /> },
     { id: 'storage', label: 'Storage and Data', sub: 'Auto-download rules & local cache', icon: <Database size={18} /> },
@@ -569,8 +569,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               <div className="rounded-2xl border border-black/8 dark:border-white/10 p-4 space-y-2">
                 <p className="font-semibold">Real-Time Sync Active</p>
                 <p className="text-xs text-slate-500 dark:text-[#9898A6] leading-relaxed">
-                  Messages sync instantaneously over WebSockets with automatic local queuing if your connection drops.
-                  For multi-region cloud sync, see <code className="font-mono-id">SUPABASE_SETUP.md</code>.
+                  Messages sync instantaneously over WebSockets with automatic local queuing if your connection drops, paired with Firebase cloud profile sync.
                 </p>
               </div>
             </div>

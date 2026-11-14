@@ -22,7 +22,9 @@ import { SettingsDrawer } from './components/SettingsDrawer';
 import { SpiderEmblem } from './components/SpiderEmblem';
 import { UpdatesView } from './components/UpdatesView';
 import { WelcomeSplash } from './components/WelcomeSplash';
-import { signOutGoogle } from './lib/firebaseAuth';
+import { onAuthStateChanged } from 'firebase/auth';
+import { firebaseAuth, signOutGoogle } from './lib/firebaseAuth';
+import { subscribeOwnPublicProfile, syncUserToFirestore, testConnection } from './lib/firestore';
 import { apiFetch, realtime, setStoredToken, triggerDesktopNotification } from './services/api';
 import type { AppNotification, ConversationSummary, UserProfile } from './types/rikzen';
 
@@ -83,6 +85,31 @@ export default function App() {
       // ignore
     }
   }, []);
+
+  const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  const [firebaseReady, setFirebaseReady] = useState(false);
+
+  // Test Firestore connectivity on boot & track Firebase Auth readiness
+  useEffect(() => {
+    testConnection();
+    const unsubAuth = onAuthStateChanged(firebaseAuth, (fbUser) => {
+      setFirebaseUid(fbUser && fbUser.emailVerified ? fbUser.uid : null);
+      setFirebaseReady(true);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  // Sync RIKZEN profile to Firestore when both Firebase Auth and backend profile are ready
+  useEffect(() => {
+    if (!firebaseReady || !firebaseUid || !me) return;
+    syncUserToFirestore(me).catch((err) => {
+      console.error('Firestore profile sync failed:', err);
+    });
+    const unsubProfile = subscribeOwnPublicProfile(firebaseUid, () => {
+      // Keeps live Firestore listener active while authenticated
+    });
+    return () => unsubProfile();
+  }, [firebaseReady, firebaseUid, me?.id, me?.fullName, me?.bio, me?.avatarUrl, me?.onboardingCompleted, me?.phone, me?.dateOfBirth, me?.appearanceSettings?.theme, me?.appearanceSettings?.wallpaper]);
 
   // Restore session silently in parallel with WelcomeSplash
   useEffect(() => {

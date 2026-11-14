@@ -14,8 +14,8 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
 
-const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
-export const firebaseAuth = getAuth(app);
+export const firebaseApp = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
+export const firebaseAuth = getAuth(firebaseApp);
 
 const provider = new GoogleAuthProvider();
 for (const scope of SCOPES) {
