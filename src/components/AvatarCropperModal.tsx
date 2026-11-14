@@ -4,7 +4,7 @@ import { uploadMediaFile } from '../services/api';
 
 interface AvatarCropperModalProps {
   currentAvatarUrl: string | null;
-  onSave: (newAvatarUrl: string | null) => void;
+  onSave: (newAvatarUrl: string | null) => Promise<void> | void;
   onClose: () => void;
 }
 
@@ -14,6 +14,7 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
   onClose,
 }) => {
   const [sourceUrl, setSourceUrl] = useState<string | null>(currentAvatarUrl);
+  const [dirty, setDirty] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -21,6 +22,8 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
 
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [saving, setSaving] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -40,6 +43,11 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
 
   const startCamera = async () => {
     setCameraError(null);
+    setUploadError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera access is not supported in this browser.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
@@ -67,6 +75,8 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
     ctx.drawImage(v, 0, 0, c.width, c.height);
     const dataUrl = c.toDataURL('image/jpeg', 0.92);
     setSourceUrl(dataUrl);
+    setDirty(true);
+    setUploadError(null);
     setZoom(1);
     setOffset({ x: 0, y: 0 });
     stopCamera();
@@ -75,55 +85,86 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadError(null);
     const reader = new FileReader();
     reader.onload = () => {
       setSourceUrl(String(reader.result));
+      setDirty(true);
       setZoom(1);
       setOffset({ x: 0, y: 0 });
     };
+    reader.onerror = () => {
+      setUploadError('Could not read selected image file.');
+    };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleConfirmSave = async () => {
-    if (!sourceUrl) {
-      onSave(null);
-      onClose();
-      return;
-    }
+    setUploadError(null);
+    setUploadProgress(0);
     setSaving(true);
     try {
-      const canvas = document.createElement('canvas');
-      const size = 400;
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d');
-      if (ctx && imgRef.current) {
-        const img = imgRef.current;
-        const baseScale = Math.max(size / img.naturalWidth, size / img.naturalHeight);
-        const finalScale = baseScale * zoom;
-        const drawW = img.naturalWidth * finalScale;
-        const drawH = img.naturalHeight * finalScale;
-        const factor = size / 240;
-        const dx = (size - drawW) / 2 + offset.x * factor;
-        const dy = (size - drawH) / 2 + offset.y * factor;
-        ctx.fillStyle = '#09090B';
-        ctx.fillRect(0, 0, size, size);
-        ctx.drawImage(img, dx, dy, drawW, drawH);
-
-        const blob = await new Promise<Blob | null>((resolve) =>
-          canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9)
-        );
-        if (blob) {
-          const uploaded = await uploadMediaFile(blob, `avatar-${Date.now()}.jpg`);
-          onSave(uploaded.fileUrl);
-          onClose();
-          return;
-        }
+      if (!sourceUrl) {
+        await onSave(null);
+        onClose();
+        return;
       }
-      onSave(sourceUrl);
+
+      if (!dirty && currentAvatarUrl && sourceUrl === currentAvatarUrl && zoom === 1 && offset.x === 0 && offset.y === 0) {
+        await onSave(currentAvatarUrl);
+        onClose();
+        return;
+      }
+
+      let uploadedUrl = sourceUrl;
+      if (imgRef.current && imgRef.current.naturalWidth > 0) {
+        const canvas = document.createElement('canvas');
+        const size = 400;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const img = imgRef.current;
+          const baseScale = Math.max(size / img.naturalWidth, size / img.naturalHeight);
+          const finalScale = baseScale * zoom;
+          const drawW = img.naturalWidth * finalScale;
+          const drawH = img.naturalHeight * finalScale;
+          const factor = size / 240;
+          const dx = (size - drawW) / 2 + offset.x * factor;
+          const dy = (size - drawH) / 2 + offset.y * factor;
+          ctx.fillStyle = '#09090B';
+          ctx.fillRect(0, 0, size, size);
+          ctx.drawImage(img, dx, dy, drawW, drawH);
+
+          let blob: Blob | null = null;
+          try {
+            blob = await new Promise<Blob | null>((resolve) =>
+              canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9)
+            );
+          } catch {
+            throw new Error('Please choose a photo from Gallery or Camera to crop and save.');
+          }
+
+          if (!blob) {
+            throw new Error('Failed to prepare cropped image.');
+          }
+          const uploaded = await uploadMediaFile(
+            blob,
+            `avatar-${Date.now()}.jpg`,
+            (pct) => setUploadProgress(pct),
+            'profile-photos'
+          );
+          uploadedUrl = uploaded.fileUrl;
+        }
+      } else if (sourceUrl.startsWith('data:') || sourceUrl.startsWith('blob:')) {
+        throw new Error('Selected photo is still loading. Please try again.');
+      }
+
+      await onSave(uploadedUrl);
       onClose();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setUploadError(err?.message || 'Failed to upload profile picture. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -140,7 +181,7 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
               stopCamera();
               onClose();
             }}
-            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-[#9898A6] hover:bg-white/5 hover:text-white"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-[#9898A6] hover:bg-white/5 hover:text-white cursor-pointer"
             aria-label="Close"
           >
             <X size={20} />
@@ -157,14 +198,14 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
                 <button
                   type="button"
                   onClick={capturePhoto}
-                  className="min-h-[44px] rounded-xl bg-[#D4AF37] px-5 py-2 text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B]"
+                  className="min-h-[44px] rounded-xl bg-[#D4AF37] px-5 py-2 text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] cursor-pointer"
                 >
                   Capture Photo
                 </button>
                 <button
                   type="button"
                   onClick={stopCamera}
-                  className="min-h-[44px] rounded-xl border border-white/15 px-4 py-2 text-sm hover:bg-white/5"
+                  className="min-h-[44px] rounded-xl border border-white/15 px-4 py-2 text-sm hover:bg-white/5 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -177,6 +218,7 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
                 onPointerDown={(e) => {
                   if (!sourceUrl) return;
                   setDragging(true);
+                  setDirty(true);
                   dragStart.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
                 }}
                 onPointerMove={(e) => {
@@ -191,7 +233,7 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
                     ref={imgRef}
                     src={sourceUrl}
                     alt="Avatar crop preview"
-                    crossOrigin="anonymous"
+                    crossOrigin={sourceUrl.startsWith('data:') ? undefined : 'anonymous'}
                     referrerPolicy="no-referrer"
                     draggable={false}
                     className="pointer-events-none h-full w-full object-cover"
@@ -217,7 +259,10 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
                     max={2.6}
                     step={0.05}
                     value={zoom}
-                    onChange={(e) => setZoom(Number(e.target.value))}
+                    onChange={(e) => {
+                      setZoom(Number(e.target.value));
+                      setDirty(true);
+                    }}
                     className="w-full accent-[#D4AF37]"
                     aria-label="Zoom avatar"
                   />
@@ -227,7 +272,7 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
                       setZoom(1);
                       setOffset({ x: 0, y: 0 });
                     }}
-                    className="min-h-[40px] rounded-lg px-2 text-xs text-[#9898A6] hover:text-white"
+                    className="min-h-[40px] rounded-lg px-2 text-xs text-[#9898A6] hover:text-white cursor-pointer"
                   >
                     <RotateCcw size={15} />
                   </button>
@@ -236,14 +281,31 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
             </>
           )}
 
-          {cameraError && (
-            <p className="mt-3 text-center text-xs text-red-400">{cameraError}</p>
+          {(cameraError || uploadError) && (
+            <div className="mt-3 w-full rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs text-red-300">
+              {cameraError || uploadError}
+            </div>
+          )}
+
+          {saving && uploadProgress > 0 && (
+            <div className="mt-3 w-full">
+              <div className="flex justify-between text-[11px] text-[#9898A6] mb-1">
+                <span>Uploading photo...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full bg-[#D4AF37] transition-all"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
           )}
 
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
             className="hidden"
             onChange={handleFileChange}
           />
@@ -252,7 +314,7 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/5 px-3 text-xs font-medium hover:border-[#D4AF37]/40 hover:bg-white/10"
+              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/5 px-3 text-xs font-medium hover:border-[#D4AF37]/40 hover:bg-white/10 cursor-pointer"
             >
               <ImagePlus size={15} />
               <span>Gallery</span>
@@ -260,15 +322,19 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
             <button
               type="button"
               onClick={startCamera}
-              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/5 px-3 text-xs font-medium hover:border-[#D4AF37]/40 hover:bg-white/10"
+              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/5 px-3 text-xs font-medium hover:border-[#D4AF37]/40 hover:bg-white/10 cursor-pointer"
             >
               <Camera size={15} />
               <span>Camera</span>
             </button>
             <button
               type="button"
-              onClick={() => setSourceUrl(null)}
-              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-red-500/25 bg-red-500/10 px-3 text-xs font-medium text-red-300 hover:bg-red-500/20"
+              onClick={() => {
+                setSourceUrl(null);
+                setDirty(true);
+                setUploadError(null);
+              }}
+              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-red-500/25 bg-red-500/10 px-3 text-xs font-medium text-red-300 hover:bg-red-500/20 cursor-pointer"
             >
               <Trash2 size={15} />
               <span>Remove</span>
@@ -279,10 +345,10 @@ export const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
             type="button"
             disabled={saving}
             onClick={handleConfirmSave}
-            className="mt-5 flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-[#D4AF37] px-5 text-sm font-semibold text-[#09090B] transition hover:bg-[#E5C76B] disabled:opacity-50"
+            className="mt-5 flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-[#D4AF37] px-5 text-sm font-semibold text-[#09090B] transition hover:bg-[#E5C76B] disabled:opacity-50 cursor-pointer"
           >
             <Check size={16} />
-            <span>{saving ? 'Saving Picture...' : 'Save Profile Picture'}</span>
+            <span>{saving ? 'Saving Picture...' : sourceUrl ? 'Save Profile Picture' : 'Remove Profile Picture'}</span>
           </button>
         </div>
       </div>

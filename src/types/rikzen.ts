@@ -168,8 +168,11 @@ export interface StatusItem {
   mediaType: 'text' | 'image' | 'video';
   content: string;
   mediaUrl: string | null;
+  thumbnailUrl?: string | null;
+  durationSeconds?: number;
   caption: string;
   backgroundColor: string;
+  fontStyle?: 'sans' | 'serif' | 'bold' | 'mono';
   privacy?: 'everyone' | 'friends' | 'contacts' | 'selected';
   isMuted: boolean;
   viewedByMe: boolean;

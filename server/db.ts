@@ -312,7 +312,21 @@ ensureColumn('conversation_members', 'custom_list', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('conversation_members', 'cleared_at', 'TEXT');
 ensureColumn('groups', 'invite_code', 'TEXT');
 ensureColumn('messages', 'expires_at', 'TEXT');
+ensureColumn('messages', 'media_url', 'TEXT');
+ensureColumn('messages', 'file_name', 'TEXT');
+ensureColumn('messages', 'file_size', 'INTEGER');
+ensureColumn('messages', 'mime_type', 'TEXT');
+ensureColumn('messages', 'duration', 'INTEGER');
+ensureColumn('messages', 'thumbnail_url', 'TEXT');
+ensureColumn('messages', 'delivery_status', "TEXT NOT NULL DEFAULT 'sent'");
 ensureColumn('statuses', 'privacy', "TEXT NOT NULL DEFAULT 'friends'");
+ensureColumn('statuses', 'font_style', "TEXT NOT NULL DEFAULT 'sans'");
+ensureColumn('statuses', 'duration', 'INTEGER');
+ensureColumn('statuses', 'thumbnail_url', 'TEXT');
+ensureColumn('attachments', 'bucket_name', 'TEXT');
+ensureColumn('attachments', 'storage_path', 'TEXT');
+ensureColumn('attachments', 'thumbnail_url', 'TEXT');
+ensureColumn('attachments', 'duration', 'INTEGER');
 
 export const DEFAULT_PRIVACY = {
   lastSeen: 'friends',

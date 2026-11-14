@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// RIKZEN CHAT — Firebase Storage Security Rules
+// Deploy in Firebase Console -> Storage -> Rules if using Firebase Storage
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isVerifiedUser() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    match /{category}/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if isVerifiedUser()
+        && request.auth.uid == userId
+        && category in ['profile-photos', 'chat-media', 'chat-documents', 'voice-messages', 'user-status', 'uploads']
+        && request.resource.size <= 50 * 1024 * 1024;
+      allow delete: if isVerifiedUser() && request.auth.uid == userId;
+    }
+  }
+}

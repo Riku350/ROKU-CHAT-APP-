@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Video } from 'lucide-react';
-import { apiFetch } from '../services/api';
+import { apiFetch, realtime } from '../services/api';
 import type { CallLogItem, PublicPeer, UserProfile } from '../types/rikzen';
 
 interface CallsViewProps {
@@ -28,7 +28,13 @@ export const CallsView: React.FC<CallsViewProps> = ({ me, onStartCall }) => {
 
   useEffect(() => {
     load();
-  }, []);
+    const unsub = realtime.subscribe((event) => {
+      if (event === 'profile:updated' || event === 'call:ended' || event === 'call:incoming' || event === 'friend:accepted') {
+        load();
+      }
+    });
+    return () => unsub();
+  }, [me.avatarUrl, me.fullName]);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-white dark:bg-[#0B0B0E] p-4 sm:p-6">

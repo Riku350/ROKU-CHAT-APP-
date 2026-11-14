@@ -41,6 +41,7 @@ import type {
   StatusItem,
   UserProfile,
 } from '../types/rikzen';
+import type { UploadCategory } from './mediaUtils';
 import { firebaseApp, firebaseAuth } from './firebaseAuth';
 import {
   db,
@@ -449,6 +450,7 @@ function mapFirestoreMessageDoc(
   const starredBy = Array.isArray(m.starredBy) ? m.starredBy : [];
   const metadata: Record<string, any> = {};
   if (m.fileUrl) metadata.fileUrl = m.fileUrl;
+  if (m.thumbnailUrl) metadata.thumbnailUrl = m.thumbnailUrl;
   if (m.fileName) metadata.fileName = m.fileName;
   if (m.mimeType) metadata.mimeType = m.mimeType;
   if (typeof m.sizeBytes === 'number') metadata.sizeBytes = m.sizeBytes;
@@ -516,16 +518,20 @@ function mapFirebaseAuthError(err: any): Error {
 export async function uploadFileToFirebaseStorage(
   file: File | Blob,
   filename = 'upload.bin',
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  category: UploadCategory = 'uploads'
 ): Promise<{ fileUrl: string; fileName: string; mimeType: string; sizeBytes: number }> {
   const user = await requireVerifiedUser();
   const storage = getStorage(firebaseApp);
   const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
-  const path = `uploads/${user.uid}/${Date.now()}-${safeName}`;
+  const folder = category || 'uploads';
+  const path = `${folder}/${user.uid}/${Date.now()}-${safeName}`;
   const sRef = storageRef(storage, path);
 
   return new Promise((resolve, reject) => {
-    const task = uploadBytesResumable(sRef, file);
+    const task = uploadBytesResumable(sRef, file, {
+      contentType: file.type || 'application/octet-stream',
+    });
     task.on(
       'state_changed',
       (snapshot) => {
@@ -538,7 +544,7 @@ export async function uploadFileToFirebaseStorage(
         if (String(msg).includes('storage/unauthorized') || String(msg).includes('permission')) {
           reject(
             new Error(
-              'Media upload needs Firebase Storage enabled & allowed in Firebase Console.'
+              'Media upload blocked by Firebase Storage rules. Deploy storage.rules in Firebase Console.'
             )
           );
           return;
@@ -1630,6 +1636,7 @@ export async function handleFirebaseApiFallback<T = any>(
         replyToType,
         forwardedFromId: body.forwardedFromId || null,
         fileUrl: sanitizeMediaUrl(meta.fileUrl),
+        thumbnailUrl: sanitizeMediaUrl(meta.thumbnailUrl),
         fileName: meta.fileName ? String(meta.fileName).slice(0, 200) : null,
         mimeType: meta.mimeType ? String(meta.mimeType).slice(0, 120) : null,
         ...(typeof meta.sizeBytes === 'number' ? { sizeBytes: Math.round(meta.sizeBytes) } : {}),
@@ -2089,8 +2096,15 @@ export async function handleFirebaseApiFallback<T = any>(
             mediaType: s.mediaType,
             content: s.content || '',
             mediaUrl: s.mediaUrl || null,
+            thumbnailUrl: s.thumbnailUrl || null,
+            durationSeconds: typeof s.durationSeconds === 'number' ? s.durationSeconds : undefined,
             caption: s.caption || '',
             backgroundColor: s.backgroundColor || '#18181D',
+            fontStyle: (['sans', 'serif', 'bold', 'mono'].includes(s.fontStyle) ? s.fontStyle : 'sans') as
+              | 'sans'
+              | 'serif'
+              | 'bold'
+              | 'mono',
             privacy: s.privacy || 'friends',
             isMuted: mutedSet.has(s.id),
             viewedByMe,
@@ -2110,9 +2124,21 @@ export async function handleFirebaseApiFallback<T = any>(
       const mediaType: 'text' | 'image' | 'video' =
         body.mediaType === 'image' || body.mediaType === 'video' ? body.mediaType : 'text';
       const content = String(body.content || '').trim().slice(0, 1000);
-      const mediaUrl = sanitizeMediaUrl(body.mediaUrl);
+      const rawMediaUrl = typeof body.mediaUrl === 'string' ? body.mediaUrl.trim() : '';
+      if (rawMediaUrl && (rawMediaUrl.startsWith('blob:') || rawMediaUrl.startsWith('data:'))) {
+        throw new Error('Temporary media URL cannot be saved. Please upload again.');
+      }
+      const mediaUrl = sanitizeMediaUrl(rawMediaUrl);
+      const thumbnailUrl = sanitizeMediaUrl(body.thumbnailUrl);
+      const durationSeconds =
+        typeof body.durationSeconds === 'number' && Number.isFinite(body.durationSeconds)
+          ? Math.max(0, Math.round(body.durationSeconds))
+          : null;
       const caption = String(body.caption || '').trim().slice(0, 300);
       const backgroundColor = String(body.backgroundColor || '#18181D').trim().slice(0, 32) || '#18181D';
+      const fontStyle = ['sans', 'serif', 'bold', 'mono'].includes(body.fontStyle)
+        ? body.fontStyle
+        : 'sans';
       const privacy = ['everyone', 'friends', 'contacts'].includes(body.privacy)
         ? body.privacy
         : 'friends';
@@ -2133,8 +2159,11 @@ export async function handleFirebaseApiFallback<T = any>(
           mediaType,
           content,
           mediaUrl,
+          thumbnailUrl,
+          ...(durationSeconds !== null ? { durationSeconds } : {}),
           caption,
           backgroundColor,
+          fontStyle,
           privacy,
           expiresAt,
           createdAt: serverTimestamp(),
@@ -2616,4 +2645,25 @@ export function subscribeIncomingCallsFirestore(
     },
     () => {}
   );
+}
+
+export function subscribeStatusesFirestore(onChange: () => void): () => void {
+  let timer: number | null = null;
+  let initial = true;
+  const unsub = onSnapshot(
+    collection(db, 'statuses'),
+    () => {
+      if (initial) {
+        initial = false;
+        return;
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => onChange(), 250);
+    },
+    () => {}
+  );
+  return () => {
+    if (timer) window.clearTimeout(timer);
+    unsub();
+  };
 }

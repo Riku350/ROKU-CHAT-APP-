@@ -57,8 +57,16 @@ import {
   uploadMediaFile,
   validateUploadFile,
 } from '../services/api';
+import {
+  detectSupportedAudioMime,
+  downloadMediaFile,
+  extractVideoMetadata,
+  formatMediaDuration,
+  type UploadCategory,
+} from '../lib/mediaUtils';
 import type { ChatMessage, ConversationSummary, UserProfile } from '../types/rikzen';
 import { CreateGroupModal, GroupManageModal } from './GroupModals';
+import { VoiceNotePlayer } from './VoiceNotePlayer';
 
 interface ChatWorkspaceProps {
   me: UserProfile;
@@ -177,7 +185,15 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   // Voice recording + pre-send audio preview
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [recordedAudio, setRecordedAudio] = useState<{ blob: Blob; url: string; duration: number } | null>(null);
+  const [recordedAudio, setRecordedAudio] = useState<{
+    blob: Blob;
+    url: string;
+    duration: number;
+    mimeType: string;
+    ext: string;
+  } | null>(null);
+  const [sendingVoice, setSendingVoice] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<number | null>(null);
@@ -191,6 +207,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [lightboxPhoto, setLightboxPhoto] = useState<{ url: string; name: string } | null>(null);
 
   // Camera capture modal
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -200,11 +217,11 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const cameraStreamRef = useRef<MediaStream | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const docInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const [uploadAccept, setUploadAccept] = useState('*/*');
-  const [uploadKind, setUploadKind] = useState<'image' | 'video' | 'document' | 'audio'>('document');
-  const [uploadMultiple, setUploadMultiple] = useState(false);
 
   const activeConv = useMemo(
     () => conversations.find((c) => c.id === activeConversationId) || null,
@@ -388,7 +405,12 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         if (payload.userId !== me.id) {
           setPeerActivities((prev) => ({ ...prev, [payload.conversationId]: null }));
         }
-      } else if (event === 'presence:update' || event === 'conversation:refresh' || event === 'friend:accepted') {
+      } else if (
+        event === 'presence:update' ||
+        event === 'profile:updated' ||
+        event === 'conversation:refresh' ||
+        event === 'friend:accepted'
+      ) {
         onRefreshConversations();
       }
     });
@@ -535,7 +557,16 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   };
 
   // File picking -> stage into Pre-send Preview Modal
-  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const categoryForKind = (kind: StagedMediaItem['kind']): UploadCategory => {
+    if (kind === 'image' || kind === 'video') return 'chat-media';
+    if (kind === 'document') return 'chat-documents';
+    return 'voice-messages';
+  };
+
+  const handleFilePick = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    forcedKind: StagedMediaItem['kind']
+  ) => {
     const picked = Array.from(e.target.files || []);
     e.target.value = '';
     if (picked.length === 0 || !activeConversationId) return;
@@ -544,15 +575,15 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
     const newStaged: StagedMediaItem[] = [];
     for (const f of picked) {
+      const kind: StagedMediaItem['kind'] = f.type.startsWith('image/')
+        ? 'image'
+        : f.type.startsWith('video/')
+        ? 'video'
+        : f.type.startsWith('audio/')
+        ? 'audio'
+        : forcedKind;
       try {
-        validateUploadFile(f, f.name);
-        const kind: StagedMediaItem['kind'] = f.type.startsWith('image/')
-          ? 'image'
-          : f.type.startsWith('video/')
-          ? 'video'
-          : f.type.startsWith('audio/')
-          ? 'audio'
-          : uploadKind;
+        validateUploadFile(f, f.name, categoryForKind(kind));
         newStaged.push({
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           file: f,
@@ -560,7 +591,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           kind,
         });
       } catch (err: any) {
-        setUploadError(err?.message || 'Unsupported or oversized file.');
+        showToast(err?.message || 'Unsupported or oversized file.');
       }
     }
     if (newStaged.length > 0) {
@@ -583,10 +614,39 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
     try {
       for (let i = 0; i < stagedFiles.length; i++) {
         const item = stagedFiles[i];
-        const uploaded = await uploadMediaFile(item.file, item.file.name, (pct) => {
-          const overall = Math.round(((i + pct / 100) / stagedFiles.length) * 100);
-          setUploadProgress(overall);
-        });
+        const category = categoryForKind(item.kind);
+        let durationSeconds: number | undefined;
+        let thumbnailUrl: string | undefined;
+
+        if (item.kind === 'video') {
+          const meta = await extractVideoMetadata(item.file);
+          if (meta.durationSeconds > 0) {
+            durationSeconds = meta.durationSeconds;
+          }
+          if (meta.thumbnailBlob) {
+            try {
+              const thumbUp = await uploadMediaFile(
+                meta.thumbnailBlob,
+                `thumb-${Date.now()}.jpg`,
+                undefined,
+                'chat-media'
+              );
+              thumbnailUrl = thumbUp.fileUrl;
+            } catch {
+              // Non-fatal thumbnail failure
+            }
+          }
+        }
+
+        const uploaded = await uploadMediaFile(
+          item.file,
+          item.file.name,
+          (pct) => {
+            const overall = Math.round(((i + pct / 100) / stagedFiles.length) * 100);
+            setUploadProgress(overall);
+          },
+          category
+        );
         const label =
           i === stagedFiles.length - 1 && stagedCaption.trim()
             ? stagedCaption.trim()
@@ -596,6 +656,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           fileName: uploaded.fileName,
           mimeType: uploaded.mimeType,
           sizeBytes: uploaded.sizeBytes,
+          ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+          ...(thumbnailUrl ? { thumbnailUrl } : {}),
         });
       }
       clearStagedFiles();
@@ -607,16 +669,10 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   };
 
   const triggerPickMedia = (kind: 'image' | 'video' | 'document' | 'audio') => {
-    setUploadKind(kind);
-    setUploadMultiple(kind === 'image');
-    const acceptMap = {
-      image: 'image/*',
-      video: 'video/*',
-      audio: 'audio/*',
-      document: '.pdf,.doc,.docx,.txt,.csv,.zip,.xls,.xlsx,.ppt,.pptx',
-    };
-    setUploadAccept(acceptMap[kind]);
-    window.setTimeout(() => fileInputRef.current?.click(), 30);
+    if (kind === 'image') photoInputRef.current?.click();
+    else if (kind === 'video') videoInputRef.current?.click();
+    else if (kind === 'document') docInputRef.current?.click();
+    else audioInputRef.current?.click();
   };
 
   // Live Camera Capture
@@ -691,12 +747,32 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
     );
   };
 
-  // Voice recording with live timer, Cancel, and Audio Preview before sending
+  // Voice recording with live timer, cross-browser MIME support, Cancel, and Retryable Audio Preview
   const startVoiceRecording = async () => {
     if (!activeConversationId) return;
+    setVoiceError(null);
+    const audioFormat = detectSupportedAudioMime();
+    if (!navigator.mediaDevices?.getUserMedia || !audioFormat) {
+      showToast('Voice recording is not supported on this browser.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
+      let mr: MediaRecorder;
+      try {
+        mr = new MediaRecorder(stream, { mimeType: audioFormat.mimeType });
+      } catch {
+        mr = new MediaRecorder(stream);
+      }
+      const actualMime = mr.mimeType || audioFormat.mimeType || 'audio/webm';
+      const actualExt = actualMime.includes('mp4')
+        ? 'm4a'
+        : actualMime.includes('ogg')
+        ? 'ogg'
+        : actualMime.includes('aac')
+        ? 'aac'
+        : audioFormat.ext || 'webm';
+
       audioChunksRef.current = [];
       recordingCancelledRef.current = false;
 
@@ -714,19 +790,21 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           setRecordingSeconds(0);
           return;
         }
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const blob = new Blob(audioChunksRef.current, { type: actualMime });
         if (blob.size > 0) {
           setRecordedAudio({
             blob,
             url: URL.createObjectURL(blob),
             duration: recordingSecRef.current,
+            mimeType: actualMime,
+            ext: actualExt,
           });
         }
         setRecordingSeconds(0);
       };
 
       mediaRecorderRef.current = mr;
-      mr.start();
+      mr.start(250);
       setRecording(true);
       setRecordingSeconds(0);
       recordingSecRef.current = 0;
@@ -749,17 +827,24 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const stopVoiceRecording = (cancel = false) => {
     recordingCancelledRef.current = cancel;
     if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-    mediaRecorderRef.current?.stop();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
     setRecording(false);
   };
 
   const sendRecordedVoice = async () => {
-    if (!recordedAudio || !activeConversationId) return;
+    if (!recordedAudio || !activeConversationId || sendingVoice) return;
+    setSendingVoice(true);
+    setVoiceError(null);
     try {
-      const uploaded = await uploadMediaFile(recordedAudio.blob, `voice-${Date.now()}.webm`);
-      URL.revokeObjectURL(recordedAudio.url);
+      const uploaded = await uploadMediaFile(
+        recordedAudio.blob,
+        `voice-${Date.now()}.${recordedAudio.ext}`,
+        undefined,
+        'voice-messages'
+      );
       const dur = recordedAudio.duration;
-      setRecordedAudio(null);
       await sendMessage('Voice message', 'voice', {
         fileUrl: uploaded.fileUrl,
         fileName: uploaded.fileName,
@@ -767,14 +852,19 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         sizeBytes: uploaded.sizeBytes,
         durationSeconds: dur,
       });
+      URL.revokeObjectURL(recordedAudio.url);
+      setRecordedAudio(null);
     } catch (err: any) {
-      showToast(err?.message || 'Failed to upload voice note.');
+      setVoiceError(err?.message || 'Failed to upload voice note. Please retry.');
+    } finally {
+      setSendingVoice(false);
     }
   };
 
   const discardRecordedVoice = () => {
     if (recordedAudio) URL.revokeObjectURL(recordedAudio.url);
     setRecordedAudio(null);
+    setVoiceError(null);
   };
 
   // Multi-select helpers
@@ -1756,58 +1846,132 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
                             {/* Media Renderers */}
                             {!msg.isDeleted && msg.messageType === 'image' && msg.metadata?.fileUrl && (
-                              <div className="mb-1.5 space-y-1">
-                                <img
-                                  src={msg.metadata.fileUrl}
-                                  alt={msg.content}
-                                  className="max-h-72 rounded-xl object-cover"
-                                />
-                                <a
-                                  href={msg.metadata.fileUrl}
-                                  download={msg.metadata.fileName || 'image'}
-                                  className="inline-flex items-center gap-1 text-[11px] text-[#D4AF37] hover:underline"
+                              <div className="mb-1.5 space-y-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLightboxPhoto({
+                                      url: msg.metadata.fileUrl,
+                                      name: msg.metadata.fileName || msg.content || 'photo.jpg',
+                                    })
+                                  }
+                                  className="block overflow-hidden rounded-xl cursor-zoom-in"
+                                >
+                                  <img
+                                    src={msg.metadata.fileUrl}
+                                    alt={msg.metadata.fileName || msg.content}
+                                    className="max-h-72 rounded-xl object-cover"
+                                  />
+                                </button>
+                                {msg.content && msg.content !== msg.metadata.fileName && (
+                                  <p className="text-sm leading-relaxed break-words">{msg.content}</p>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    downloadMediaFile(msg.metadata.fileUrl, msg.metadata.fileName || 'photo.jpg')
+                                  }
+                                  className="inline-flex items-center gap-1 text-[11px] text-[#D4AF37] hover:underline cursor-pointer"
                                 >
                                   <Download size={12} /> Download photo
-                                </a>
+                                </button>
                               </div>
                             )}
 
                             {!msg.isDeleted && msg.messageType === 'video' && msg.metadata?.fileUrl && (
-                              <div className="mb-1.5 space-y-1">
-                                <video src={msg.metadata.fileUrl} controls className="max-h-72 rounded-xl" />
-                                <a
-                                  href={msg.metadata.fileUrl}
-                                  download={msg.metadata.fileName || 'video'}
-                                  className="inline-flex items-center gap-1 text-[11px] text-[#D4AF37] hover:underline"
+                              <div className="mb-1.5 space-y-1.5">
+                                <div className="relative overflow-hidden rounded-xl bg-black">
+                                  <video
+                                    src={msg.metadata.fileUrl}
+                                    poster={msg.metadata.thumbnailUrl || undefined}
+                                    controls
+                                    playsInline
+                                    preload="metadata"
+                                    className="max-h-72 w-full rounded-xl"
+                                  />
+                                  {typeof msg.metadata.durationSeconds === 'number' &&
+                                    msg.metadata.durationSeconds > 0 && (
+                                      <span className="pointer-events-none absolute top-2 left-2 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white tabular-nums">
+                                        {formatMediaDuration(msg.metadata.durationSeconds)}
+                                      </span>
+                                    )}
+                                </div>
+                                {msg.content && msg.content !== msg.metadata.fileName && (
+                                  <p className="text-sm leading-relaxed break-words">{msg.content}</p>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    downloadMediaFile(msg.metadata.fileUrl, msg.metadata.fileName || 'video.mp4')
+                                  }
+                                  className="inline-flex items-center gap-1 text-[11px] text-[#D4AF37] hover:underline cursor-pointer"
                                 >
                                   <Download size={12} /> Download video
-                                </a>
+                                </button>
                               </div>
                             )}
 
                             {!msg.isDeleted &&
                               (msg.messageType === 'voice' || msg.messageType === 'audio') &&
                               msg.metadata?.fileUrl && (
-                                <audio src={msg.metadata.fileUrl} controls className="mb-1 max-w-full" />
+                                <div className="mb-1">
+                                  <VoiceNotePlayer
+                                    src={msg.metadata.fileUrl}
+                                    durationSeconds={msg.metadata.durationSeconds}
+                                    fileName={msg.metadata.fileName}
+                                    mimeType={msg.metadata.mimeType}
+                                    onDownload={() =>
+                                      downloadMediaFile(
+                                        msg.metadata.fileUrl,
+                                        msg.metadata.fileName || `voice-${msg.id}.webm`
+                                      )
+                                    }
+                                  />
+                                </div>
                               )}
 
                             {!msg.isDeleted && msg.messageType === 'document' && msg.metadata?.fileUrl && (
-                              <a
-                                href={msg.metadata.fileUrl}
-                                download={msg.metadata.fileName || msg.content}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="mb-1.5 flex items-center gap-2.5 rounded-xl bg-black/15 dark:bg-black/35 p-2.5 text-xs hover:bg-black/25"
-                              >
-                                <FileText size={18} className="text-[#D4AF37] shrink-0" />
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate font-medium">{msg.metadata.fileName || msg.content}</p>
-                                  {msg.metadata.sizeBytes ? (
-                                    <p className="text-[10px] opacity-70">{formatBytes(msg.metadata.sizeBytes)}</p>
-                                  ) : null}
+                              <div className="mb-1.5 rounded-xl bg-black/15 dark:bg-black/35 p-2.5 text-xs">
+                                <div className="flex items-center gap-2.5">
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#D4AF37]/15 font-mono-id text-[10px] font-bold uppercase text-[#D4AF37]">
+                                    {(
+                                      (msg.metadata.fileName || 'DOC').split('.').pop() || 'DOC'
+                                    ).slice(0, 4)}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate font-medium">
+                                      {msg.metadata.fileName || msg.content}
+                                    </p>
+                                    {msg.metadata.sizeBytes ? (
+                                      <p className="text-[10px] opacity-70">
+                                        {formatBytes(msg.metadata.sizeBytes)}
+                                      </p>
+                                    ) : null}
+                                  </div>
                                 </div>
-                                <Download size={14} className="shrink-0" />
-                              </a>
+                                <div className="mt-2 flex items-center gap-2 border-t border-white/10 pt-2">
+                                  <a
+                                    href={msg.metadata.fileUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-white/8 py-1.5 text-[11px] font-medium hover:bg-white/15"
+                                  >
+                                    <ExternalLink size={12} /> Open
+                                  </a>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      downloadMediaFile(
+                                        msg.metadata.fileUrl,
+                                        msg.metadata.fileName || msg.content
+                                      )
+                                    }
+                                    className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-[#D4AF37]/15 py-1.5 text-[11px] font-medium text-[#D4AF37] hover:bg-[#D4AF37]/25 cursor-pointer"
+                                  >
+                                    <Download size={12} /> Download
+                                  </button>
+                                </div>
+                              </div>
                             )}
 
                             {!msg.isDeleted && msg.messageType === 'location' && msg.metadata?.latitude && (
@@ -2137,12 +2301,33 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             ) : (
               <div className="relative border-t border-black/10 dark:border-white/10 bg-white dark:bg-[#111115] px-2 sm:px-4 py-2.5">
                 <input
-                  ref={fileInputRef}
+                  ref={photoInputRef}
                   type="file"
-                  accept={uploadAccept}
-                  multiple={uploadMultiple}
+                  accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
+                  multiple
                   className="hidden"
-                  onChange={handleFilePick}
+                  onChange={(e) => handleFilePick(e, 'image')}
+                />
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime,video/*"
+                  className="hidden"
+                  onChange={(e) => handleFilePick(e, 'video')}
+                />
+                <input
+                  ref={docInputRef}
+                  type="file"
+                  accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,.ppt,.pptx,.csv,.zip"
+                  className="hidden"
+                  onChange={(e) => handleFilePick(e, 'document')}
+                />
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(e) => handleFilePick(e, 'audio')}
                 />
 
                 {emojiOpen && (
@@ -2161,46 +2346,46 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 )}
 
                 {attachOpen && (
-                  <div className="absolute bottom-16 left-12 z-30 w-56 rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-[#16161C] p-2 shadow-2xl space-y-1 text-xs">
+                  <div className="absolute bottom-16 left-12 z-30 w-60 rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-[#16161C] p-2 shadow-2xl space-y-1 text-xs">
                     <button
                       type="button"
                       onClick={() => triggerPickMedia('image')}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                     >
-                      <ImageIcon size={16} className="text-[#D4AF37]" /> Photos (Single / Multiple)
+                      <ImageIcon size={16} className="text-[#D4AF37]" /> Photos (Gallery / Multi)
                     </button>
                     <button
                       type="button"
                       onClick={() => openCamera('environment')}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                     >
                       <Camera size={16} className="text-emerald-400" /> Take Photo (Camera)
                     </button>
                     <button
                       type="button"
                       onClick={() => triggerPickMedia('video')}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                     >
-                      <Video size={16} className="text-purple-400" /> Video
+                      <Video size={16} className="text-purple-400" /> Video (up to 50 MB)
                     </button>
                     <button
                       type="button"
                       onClick={() => triggerPickMedia('document')}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                     >
-                      <FileText size={16} className="text-sky-400" /> Document (PDF, Word)
+                      <FileText size={16} className="text-sky-400" /> Document (PDF, DOC, XLS, PPT)
                     </button>
                     <button
                       type="button"
                       onClick={() => triggerPickMedia('audio')}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                     >
                       <Mic size={16} className="text-amber-400" /> Audio File
                     </button>
                     <button
                       type="button"
                       onClick={shareLocation}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                     >
                       <MapPin size={16} className="text-emerald-400" /> Share Location
                     </button>
@@ -2208,22 +2393,40 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 )}
 
                 {recordedAudio ? (
-                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#D4AF37]/35 bg-[#18181D] p-2">
-                    <audio src={recordedAudio.url} controls className="h-9 flex-1 min-w-[180px]" />
-                    <button
-                      type="button"
-                      onClick={discardRecordedVoice}
-                      className="flex h-9 items-center gap-1 rounded-lg border border-white/15 px-3 text-xs text-red-400 hover:bg-red-500/10"
-                    >
-                      <Trash2 size={14} /> Discard
-                    </button>
-                    <button
-                      type="button"
-                      onClick={sendRecordedVoice}
-                      className="flex h-9 items-center gap-1 rounded-lg bg-[#D4AF37] px-3.5 text-xs font-semibold text-[#09090B]"
-                    >
-                      <Send size={14} /> Send Voice Note
-                    </button>
+                  <div className="space-y-2 rounded-xl border border-[#D4AF37]/35 bg-[#18181D] p-2.5">
+                    {voiceError && (
+                      <p className="rounded-lg border border-red-500/35 bg-red-500/15 px-2.5 py-1 text-xs text-red-200">
+                        {voiceError}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex-1 min-w-[180px]">
+                        <VoiceNotePlayer
+                          compact
+                          src={recordedAudio.url}
+                          durationSeconds={recordedAudio.duration}
+                          mimeType={recordedAudio.mimeType}
+                          fileName={`voice-preview.${recordedAudio.ext}`}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={sendingVoice}
+                        onClick={discardRecordedVoice}
+                        className="flex h-9 items-center gap-1 rounded-lg border border-white/15 px-3 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                      >
+                        <Trash2 size={14} /> Discard
+                      </button>
+                      <button
+                        type="button"
+                        disabled={sendingVoice}
+                        onClick={sendRecordedVoice}
+                        className="flex h-9 items-center gap-1 rounded-lg bg-[#D4AF37] px-3.5 text-xs font-semibold text-[#09090B] disabled:opacity-50 cursor-pointer"
+                      >
+                        <Send size={14} />{' '}
+                        {sendingVoice ? 'Sending...' : voiceError ? 'Retry Send' : 'Send Voice Note'}
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <form
@@ -2560,19 +2763,25 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 </div>
               )}
 
-              <button
-                type="button"
-                disabled={uploadingFiles}
-                onClick={sendStagedMedia}
-                className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] disabled:opacity-50"
-              >
-                <Send size={16} />
-                <span>{uploadingFiles ? `Sending (${uploadProgress}%)...` : 'Send Media'}</span>
-              </button>
+                <button
+                  type="button"
+                  disabled={uploadingFiles}
+                  onClick={sendStagedMedia}
+                  className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] disabled:opacity-50 cursor-pointer"
+                >
+                  <Send size={16} />
+                  <span>
+                    {uploadingFiles
+                      ? `Sending (${uploadProgress}%)...`
+                      : uploadError
+                      ? 'Retry Upload'
+                      : 'Send Media'}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* Camera Capture Modal */}
       {cameraOpen && (
@@ -2706,20 +2915,28 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 ) : (
                   <div className="space-y-2">
                     {sharedItems.docs.map((m) => (
-                      <a
+                      <div
                         key={m.id}
-                        href={m.metadata.fileUrl}
-                        download={m.metadata.fileName || m.content}
-                        target="_blank"
-                        rel="noreferrer"
                         className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#09090B] p-3 text-xs hover:border-[#D4AF37]"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <a
+                          href={m.metadata.fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2.5 min-w-0 flex-1 hover:text-[#D4AF37]"
+                        >
                           <FileText size={16} className="text-[#D4AF37] shrink-0" />
                           <span className="truncate">{m.metadata.fileName || m.content}</span>
-                        </div>
-                        <Download size={14} className="shrink-0" />
-                      </a>
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => downloadMediaFile(m.metadata.fileUrl, m.metadata.fileName || m.content)}
+                          className="shrink-0 p-1 hover:text-[#D4AF37] cursor-pointer"
+                          title="Download document"
+                        >
+                          <Download size={14} />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )
@@ -2881,6 +3098,44 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           onClose={() => setManageGroupId(null)}
           onUpdated={onRefreshConversations}
         />
+      )}
+
+      {/* Photo Lightbox Modal */}
+      {lightboxPhoto && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 text-white"
+          onClick={() => setLightboxPhoto(null)}
+        >
+          <div
+            className="flex w-full max-w-4xl items-center justify-between pb-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="truncate text-sm font-medium text-white/90">{lightboxPhoto.name}</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => downloadMediaFile(lightboxPhoto.url, lightboxPhoto.name)}
+                className="flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#D4AF37] px-3.5 text-xs font-semibold text-[#09090B] hover:bg-[#E5C76B] cursor-pointer"
+              >
+                <Download size={14} /> Download
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxPhoto(null)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 hover:bg-white/20 cursor-pointer"
+                aria-label="Close photo viewer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+          <img
+            src={lightboxPhoto.url}
+            alt={lightboxPhoto.name}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[82vh] max-w-full rounded-xl object-contain"
+          />
+        </div>
       )}
     </div>
   );

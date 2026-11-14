@@ -1,4 +1,6 @@
 import { handleFirebaseApiFallback, uploadFileToFirebaseStorage } from '../lib/firebaseBackend';
+import { isSupabaseConfigured, supabase } from '../lib/supabaseClient';
+import type { UploadCategory } from '../lib/mediaUtils';
 
 const TOKEN_KEY = 'rikzen_auth_token';
 const UNSENT_QUEUE_KEY = 'rikzen_unsent_queue';
@@ -68,20 +70,40 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
   return data as T;
 }
 
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 10 * 1024 * 1024;
+
 const ALLOWED_UPLOAD_EXTS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp', 'svg',
-  'mp4', 'webm', 'mov', 'm4v', '3gp',
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp',
+  'mp4', 'webm', 'mov', 'm4v', '3gp', 'mkv',
   'mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'flac',
   'pdf', 'doc', 'docx', 'txt', 'csv', 'rtf', 'zip', 'xls', 'xlsx', 'ppt', 'pptx',
 ]);
 
-export function validateUploadFile(file: File | Blob, filename = 'upload.bin'): void {
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error('File size exceeds the 25 MB limit.');
-  }
+export function validateUploadFile(
+  file: File | Blob,
+  filename = 'upload.bin',
+  category: UploadCategory = 'uploads'
+): void {
   const mime = (file.type || '').toLowerCase();
   const ext = (filename.split('.').pop() || '').toLowerCase();
+  const isVideo = mime.startsWith('video/') || ['mp4', 'webm', 'mov', 'm4v', '3gp', 'mkv'].includes(ext);
+  const maxAllowed =
+    category === 'profile-photos'
+      ? MAX_AVATAR_BYTES
+      : isVideo
+      ? MAX_VIDEO_BYTES
+      : MAX_MEDIA_BYTES;
+
+  if (file.size <= 0) {
+    throw new Error('Selected file is empty.');
+  }
+  if (file.size > maxAllowed) {
+    const mb = Math.round(maxAllowed / (1024 * 1024));
+    throw new Error(`File size exceeds the ${mb} MB limit.`);
+  }
+
   const mimeOk =
     mime.startsWith('image/') ||
     mime.startsWith('video/') ||
@@ -90,40 +112,102 @@ export function validateUploadFile(file: File | Blob, filename = 'upload.bin'): 
     mime.includes('word') ||
     mime.includes('document') ||
     mime.includes('spreadsheet') ||
+    mime.includes('excel') ||
     mime.includes('presentation') ||
+    mime.includes('powerpoint') ||
     mime === 'text/plain' ||
     mime === 'text/csv' ||
     mime === 'application/zip' ||
     mime === 'application/octet-stream' ||
     mime === '';
-  if (!mimeOk && !ALLOWED_UPLOAD_EXTS.has(ext)) {
+
+  if ((!mimeOk && !ALLOWED_UPLOAD_EXTS.has(ext)) || ['html', 'htm', 'js', 'mjs', 'exe', 'sh', 'svg'].includes(ext)) {
     throw new Error(`Unsupported file format (${ext || mime}).`);
   }
 }
 
-export async function uploadMediaFile(
+async function tryUploadToSupabaseStorage(
   file: File | Blob,
-  filename = 'upload.bin',
+  filename: string,
+  category: UploadCategory,
   onProgress?: (percent: number) => void
 ): Promise<{
   fileUrl: string;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
+} | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData?.session?.user?.id;
+    if (!userId) return null;
+
+    const bucket = category === 'uploads' ? 'chat-media' : category;
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 72);
+    const storagePath = `${userId}/${Date.now()}-${safeName}`;
+    onProgress?.(25);
+    const { error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(storagePath, file, {
+        contentType: file.type || 'application/octet-stream',
+        upsert: false,
+      });
+    if (uploadError) {
+      throw new Error(uploadError.message || 'Supabase Storage upload failed.');
+    }
+    const { data: pubData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+    if (!pubData?.publicUrl) {
+      throw new Error('Could not resolve public file URL from Supabase Storage.');
+    }
+    onProgress?.(100);
+    return {
+      fileUrl: pubData.publicUrl,
+      fileName: filename,
+      mimeType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+    };
+  } catch (err) {
+    if (serverlessFirebaseMode) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function uploadMediaFile(
+  file: File | Blob,
+  filename = 'upload.bin',
+  onProgress?: (percent: number) => void,
+  category: UploadCategory = 'uploads'
+): Promise<{
+  fileUrl: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
 }> {
-  validateUploadFile(file, filename);
+  validateUploadFile(file, filename, category);
+
+  const supabaseRes = await tryUploadToSupabaseStorage(file, filename, category, onProgress).catch((err) => {
+    if (serverlessFirebaseMode) return null;
+    throw err;
+  });
+  if (supabaseRes) {
+    return supabaseRes;
+  }
 
   if (serverlessFirebaseMode) {
-    return uploadFileToFirebaseStorage(file, filename, onProgress);
+    return uploadFileToFirebaseStorage(file, filename, onProgress, category);
   }
 
   const form = new FormData();
+  form.append('bucket', category);
   form.append('file', file, filename);
   const token = getStoredToken();
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/uploads', true);
+    xhr.open('POST', `/api/uploads?bucket=${encodeURIComponent(category)}`, true);
     xhr.withCredentials = true;
     if (token) {
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
@@ -140,7 +224,7 @@ export async function uploadMediaFile(
       if (xhr.status === 404 || !contentType.includes('application/json')) {
         serverlessFirebaseMode = true;
         try {
-          const fbRes = await uploadFileToFirebaseStorage(file, filename, onProgress);
+          const fbRes = await uploadFileToFirebaseStorage(file, filename, onProgress, category);
           resolve(fbRes);
         } catch (fbErr) {
           reject(fbErr);
@@ -165,7 +249,7 @@ export async function uploadMediaFile(
     xhr.onerror = async () => {
       if (serverlessFirebaseMode) {
         try {
-          const fbRes = await uploadFileToFirebaseStorage(file, filename, onProgress);
+          const fbRes = await uploadFileToFirebaseStorage(file, filename, onProgress, category);
           resolve(fbRes);
         } catch (fbErr) {
           reject(fbErr);

@@ -128,6 +128,11 @@ appRouter.patch('/profiles/me', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
 
+  if (typeof avatarUrl === 'string' && (avatarUrl.startsWith('blob:') || avatarUrl.startsWith('data:'))) {
+    res.status(400).json({ error: 'Temporary local image URLs cannot be saved as a profile picture.' });
+    return;
+  }
+
   const nextName = typeof fullName === 'string' && fullName.trim() ? fullName.trim().slice(0, 80) : current.full_name;
   const nextBio = typeof bio === 'string' ? bio.trim().slice(0, 220) : current.bio;
   const nextAvatar = avatarUrl === null ? null : typeof avatarUrl === 'string' ? avatarUrl : current.avatar_url;
@@ -139,6 +144,29 @@ appRouter.patch('/profiles/me', requireAuth, (req: AuthedRequest, res) => {
   ).run(nextName, nextBio, nextAvatar, nextDob, nextPhone, new Date().toISOString(), uid);
 
   const updated = db.prepare('SELECT * FROM profiles WHERE id = ?').get(uid) as any;
+
+  // Broadcast live profile / DP updates to friends and active conversation peers
+  const friendRows = db
+    .prepare('SELECT CASE WHEN user_one = ? THEN user_two ELSE user_one END AS peer_id FROM friendships WHERE user_one = ? OR user_two = ?')
+    .all(uid, uid, uid) as Array<{ peer_id: string }>;
+  const convPeerRows = db
+    .prepare(
+      `SELECT DISTINCT cm2.user_id AS peer_id
+       FROM conversation_members cm1
+       JOIN conversation_members cm2 ON cm2.conversation_id = cm1.conversation_id
+       WHERE cm1.user_id = ? AND cm2.user_id != ?`
+    )
+    .all(uid, uid) as Array<{ peer_id: string }>;
+  const peerIds = Array.from(new Set([...friendRows.map((r) => r.peer_id), ...convPeerRows.map((r) => r.peer_id)]));
+  if (peerIds.length > 0) {
+    sendToUsers(peerIds, 'profile:updated', {
+      userId: uid,
+      fullName: updated.full_name,
+      avatarUrl: updated.avatar_url,
+      bio: updated.bio,
+    });
+  }
+
   res.json({
     profile: {
       id: updated.id,
@@ -680,6 +708,18 @@ function formatMessageRow(row: any, uid: string) {
 
   const deletedFor = safeJsonParse<string[]>(row.deleted_for_users, []);
   const starredBy = safeJsonParse<string[]>(row.starred_by, []);
+  const parsedMeta = safeJsonParse<Record<string, any>>(row.metadata, {});
+  const mergedMeta: Record<string, any> = {
+    ...parsedMeta,
+    ...(row.media_url && !parsedMeta.fileUrl ? { fileUrl: row.media_url } : {}),
+    ...(row.file_name && !parsedMeta.fileName ? { fileName: row.file_name } : {}),
+    ...(row.file_size && !parsedMeta.sizeBytes ? { sizeBytes: Number(row.file_size) } : {}),
+    ...(row.mime_type && !parsedMeta.mimeType ? { mimeType: row.mime_type } : {}),
+    ...(row.duration !== null && row.duration !== undefined && parsedMeta.durationSeconds === undefined
+      ? { durationSeconds: Number(row.duration) }
+      : {}),
+    ...(row.thumbnail_url && !parsedMeta.thumbnailUrl ? { thumbnailUrl: row.thumbnail_url } : {}),
+  };
 
   return {
     id: row.id,
@@ -692,7 +732,7 @@ function formatMessageRow(row: any, uid: string) {
     replyToId: row.reply_to_id,
     replyTo,
     forwardedFromId: row.forwarded_from_id,
-    metadata: safeJsonParse(row.metadata, {}),
+    metadata: mergedMeta,
     isEdited: Boolean(row.is_edited),
     isDeleted: Boolean(row.is_deleted),
     hiddenForMe: deletedFor.includes(uid),
@@ -906,6 +946,12 @@ appRouter.post('/conversations/:id/messages', requireAuth, (req: AuthedRequest, 
     return;
   }
 
+  const rawFileUrl = typeof metadata?.fileUrl === 'string' ? metadata.fileUrl : null;
+  if (rawFileUrl && (rawFileUrl.startsWith('blob:') || rawFileUrl.startsWith('data:'))) {
+    res.status(400).json({ error: 'Temporary local media URLs cannot be sent. Upload the file first.' });
+    return;
+  }
+
   const msgId = crypto.randomUUID();
   const now = new Date();
   const nowIso = now.toISOString();
@@ -916,9 +962,24 @@ appRouter.post('/conversations/:id/messages', requireAuth, (req: AuthedRequest, 
   const disappearingSec = Number(timerRow?.max_sec || 0);
   const expiresAt = disappearingSec > 0 ? new Date(now.getTime() + disappearingSec * 1000).toISOString() : null;
 
+  const cleanMeta = metadata && typeof metadata === 'object' ? metadata : {};
+  const mediaUrlCol = typeof cleanMeta.fileUrl === 'string' ? cleanMeta.fileUrl : null;
+  const fileNameCol = typeof cleanMeta.fileName === 'string' ? cleanMeta.fileName : null;
+  const fileSizeCol = typeof cleanMeta.sizeBytes === 'number' ? Math.round(cleanMeta.sizeBytes) : null;
+  const mimeTypeCol = typeof cleanMeta.mimeType === 'string' ? cleanMeta.mimeType : null;
+  const durationCol =
+    typeof cleanMeta.durationSeconds === 'number' ? Math.round(cleanMeta.durationSeconds) : null;
+  const thumbCol =
+    typeof cleanMeta.thumbnailUrl === 'string' && !cleanMeta.thumbnailUrl.startsWith('blob:')
+      ? cleanMeta.thumbnailUrl
+      : null;
+
   db.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_id, content, message_type, reply_to_id, forwarded_from_id, metadata, expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (
+       id, conversation_id, sender_id, content, message_type, reply_to_id, forwarded_from_id,
+       metadata, media_url, file_name, file_size, mime_type, duration, thumbnail_url,
+       delivery_status, expires_at, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?)`
   ).run(
     msgId,
     convId,
@@ -927,7 +988,13 @@ appRouter.post('/conversations/:id/messages', requireAuth, (req: AuthedRequest, 
     messageType,
     replyToId,
     forwardedFromId,
-    JSON.stringify(metadata || {}),
+    JSON.stringify(cleanMeta),
+    mediaUrlCol,
+    fileNameCol,
+    fileSizeCol,
+    mimeTypeCol,
+    durationCol,
+    thumbCol,
     expiresAt,
     nowIso,
     nowIso
@@ -1533,6 +1600,9 @@ appRouter.get('/statuses', requireAuth, (req: AuthedRequest, res) => {
         mediaUrl: row.media_url,
         caption: row.caption,
         backgroundColor: row.background_color,
+        fontStyle: (row.font_style as 'sans' | 'serif' | 'bold' | 'mono') || 'sans',
+        durationSeconds: row.duration ? Number(row.duration) : undefined,
+        thumbnailUrl: row.thumbnail_url || null,
         privacy: row.privacy || 'friends',
         isMuted: mutedBy.includes(uid),
         viewedByMe,
@@ -1554,26 +1624,66 @@ appRouter.post('/statuses', requireAuth, (req: AuthedRequest, res) => {
     mediaUrl = null,
     caption = '',
     backgroundColor = '#141418',
+    fontStyle = 'sans',
+    durationSeconds = null,
+    thumbnailUrl = null,
     privacy = 'friends',
   } = req.body || {};
+
+  if (typeof mediaUrl === 'string' && (mediaUrl.startsWith('blob:') || mediaUrl.startsWith('data:'))) {
+    res.status(400).json({ error: 'Temporary local media URLs cannot be published.' });
+    return;
+  }
+
+  const safeType = mediaType === 'image' || mediaType === 'video' ? mediaType : 'text';
+  if (safeType === 'text' && !String(content || '').trim()) {
+    res.status(400).json({ error: 'Please write text for your status.' });
+    return;
+  }
+  if (safeType !== 'text' && !mediaUrl) {
+    res.status(400).json({ error: 'Uploaded media URL is required for photo/video status.' });
+    return;
+  }
+
+  const safeFontStyle = ['sans', 'serif', 'bold', 'mono'].includes(fontStyle) ? fontStyle : 'sans';
+  const safePrivacy = privacy === 'everyone' ? 'everyone' : 'friends';
   const id = crypto.randomUUID();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   db.prepare(
-    `INSERT INTO statuses (id, user_id, media_type, content, media_url, caption, background_color, privacy, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO statuses (id, user_id, media_type, content, media_url, caption, background_color, font_style, duration, thumbnail_url, privacy, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     uid,
-    mediaType,
-    content,
-    mediaUrl,
-    caption,
-    backgroundColor,
-    privacy === 'everyone' ? 'everyone' : 'friends',
+    safeType,
+    String(content || ''),
+    mediaUrl || null,
+    String(caption || ''),
+    String(backgroundColor || '#141418'),
+    safeFontStyle,
+    typeof durationSeconds === 'number' ? Math.round(durationSeconds) : null,
+    thumbnailUrl && typeof thumbnailUrl === 'string' && !thumbnailUrl.startsWith('blob:') ? thumbnailUrl : null,
+    safePrivacy,
     expiresAt,
     now.toISOString()
+  );
+
+  const audienceRows =
+    safePrivacy === 'everyone'
+      ? (db.prepare('SELECT id AS peer_id FROM profiles WHERE id != ? AND is_suspended = 0').all(uid) as Array<{
+          peer_id: string;
+        }>)
+      : (db
+          .prepare(
+            'SELECT CASE WHEN user_one = ? THEN user_two ELSE user_one END AS peer_id FROM friendships WHERE user_one = ? OR user_two = ?'
+          )
+          .all(uid, uid, uid) as Array<{ peer_id: string }>);
+  sendToUsers(
+    [uid, ...audienceRows.map((r) => r.peer_id)],
+    'status:new',
+    { id, userId: uid }
   );
 
   res.status(201).json({ id, expiresAt });
@@ -1594,6 +1704,9 @@ appRouter.post('/statuses/:id/view', requireAuth, (req: AuthedRequest, res) => {
      ON CONFLICT(status_id, viewer_id) DO UPDATE SET reaction = COALESCE(excluded.reaction, status_views.reaction), viewed_at = excluded.viewed_at`
   ).run(status.id, uid, reaction, now);
 
+  if (status.user_id !== uid) {
+    sendToUser(status.user_id, 'status:viewed', { statusId: status.id, viewerId: uid, reaction });
+  }
   if (reaction && status.user_id !== uid) {
     const viewer = db.prepare('SELECT full_name FROM profiles WHERE id = ?').get(uid) as { full_name: string };
     createNotification(
@@ -1614,13 +1727,26 @@ appRouter.post('/statuses/:id/mute', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
   const muted = safeJsonParse<string[]>(status.muted_by, []);
-  if (!muted.includes(uid)) muted.push(uid);
+  const idx = muted.indexOf(uid);
+  if (idx > -1) muted.splice(idx, 1);
+  else muted.push(uid);
   db.prepare('UPDATE statuses SET muted_by = ? WHERE id = ?').run(JSON.stringify(muted), status.id);
   res.json({ ok: true });
 });
 
 appRouter.delete('/statuses/:id', requireAuth, (req: AuthedRequest, res) => {
-  db.prepare('DELETE FROM statuses WHERE id = ? AND user_id = ?').run(req.params.id, req.userId!);
+  const uid = req.userId!;
+  db.prepare('DELETE FROM statuses WHERE id = ? AND user_id = ?').run(req.params.id, uid);
+  const friendRows = db
+    .prepare(
+      'SELECT CASE WHEN user_one = ? THEN user_two ELSE user_one END AS peer_id FROM friendships WHERE user_one = ? OR user_two = ?'
+    )
+    .all(uid, uid, uid) as Array<{ peer_id: string }>;
+  sendToUsers(
+    [uid, ...friendRows.map((r) => r.peer_id)],
+    'status:deleted',
+    { id: req.params.id, userId: uid }
+  );
   res.json({ ok: true });
 });
 

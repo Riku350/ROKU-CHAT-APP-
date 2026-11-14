@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronLeft,
@@ -9,10 +9,14 @@ import {
   Plus,
   Send,
   Trash2,
+  Type,
+  Video,
   VolumeX,
   X,
 } from 'lucide-react';
-import { apiFetch, uploadMediaFile } from '../services/api';
+import { subscribeStatusesFirestore } from '../lib/firebaseBackend';
+import { extractVideoMetadata, formatMediaDuration } from '../lib/mediaUtils';
+import { apiFetch, isServerlessFirebaseMode, realtime, uploadMediaFile } from '../services/api';
 import type { StatusItem, UserProfile } from '../types/rikzen';
 
 interface UpdatesViewProps {
@@ -21,8 +25,17 @@ interface UpdatesViewProps {
 }
 
 const STATUS_COLORS = ['#141418', '#1F1A0E', '#0D2619', '#23121E', '#111B2B'];
-const QUICK_PRESETS = ['Available ✅', 'Busy right now 🔕', 'At Work 💼', "Let's Chat ✨"];
 const COMPOSER_EMOJIS = ['😀', '🔥', '❤️', '✨', '🎉', '🙌', '💯', '😎'];
+const FONT_STYLE_OPTIONS: Array<{ id: 'sans' | 'serif' | 'bold' | 'mono'; label: string; cls: string }> = [
+  { id: 'sans', label: 'Modern', cls: 'font-sans font-semibold' },
+  { id: 'serif', label: 'Classic', cls: 'font-serif font-semibold' },
+  { id: 'bold', label: 'Bold', cls: 'font-display font-extrabold tracking-tight' },
+  { id: 'mono', label: 'Mono', cls: 'font-mono font-semibold' },
+];
+
+function getFontStyleClass(style?: string): string {
+  return FONT_STYLE_OPTIONS.find((f) => f.id === style)?.cls || 'font-display font-semibold';
+}
 
 function formatStatusErr(err: any): string {
   const raw = err?.message || 'Something went wrong. Please try again.';
@@ -43,19 +56,26 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerErr, setComposerErr] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'text' | 'image' | 'video'>('text');
   const [textContent, setTextContent] = useState('');
   const [caption, setCaption] = useState('');
   const [bgColor, setBgColor] = useState(STATUS_COLORS[0]);
+  const [fontStyle, setFontStyle] = useState<'sans' | 'serif' | 'bold' | 'mono'>('sans');
   const [privacy, setPrivacy] = useState<'friends' | 'everyone'>('friends');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState<number>(0);
+  const [videoThumbBlob, setVideoThumbBlob] = useState<Blob | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
-  // Segmented story viewer state (author's list + index + live bar progress)
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Segmented story viewer state
   const [viewerQueue, setViewerQueue] = useState<StatusItem[]>([]);
   const [viewerPos, setViewerPos] = useState<number>(0);
   const [progressPct, setProgressPct] = useState<number>(0);
@@ -68,12 +88,18 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setSelectedFile(null);
+    setVideoDuration(0);
+    setVideoThumbBlob(null);
     setUploadProgress(0);
   };
 
-  const openComposer = () => {
+  const openComposerMode = (mode: 'text' | 'image' | 'video') => {
+    setAddMenuOpen(false);
     setComposerErr(null);
     setUploadProgress(0);
+    clearPreview();
+    setCaption('');
+    setMediaType(mode);
     setComposerOpen(true);
   };
 
@@ -85,7 +111,6 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
   };
 
   const loadStatuses = async () => {
-    setLoading(true);
     try {
       const data = await apiFetch('/api/statuses');
       setStatuses(data.statuses || []);
@@ -99,7 +124,22 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
 
   useEffect(() => {
     loadStatuses();
-  }, []);
+    if (isServerlessFirebaseMode()) {
+      const unsub = subscribeStatusesFirestore(() => loadStatuses());
+      return () => unsub();
+    }
+    const unsub = realtime.subscribe((event) => {
+      if (
+        event === 'status:new' ||
+        event === 'status:viewed' ||
+        event === 'status:deleted' ||
+        event === 'profile:updated'
+      ) {
+        loadStatuses();
+      }
+    });
+    return () => unsub();
+  }, [me.avatarUrl, me.fullName]);
 
   const showToast = (msg: string) => {
     setSuccessMsg(msg);
@@ -120,12 +160,9 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     [statuses, me.id]
   );
 
-  // Sync viewer queue if statuses reload (e.g. view count/reaction updated)
   useEffect(() => {
     if (!activeStatus) return;
-    setViewerQueue((prev) =>
-      prev.map((item) => statuses.find((s) => s.id === item.id) || item)
-    );
+    setViewerQueue((prev) => prev.map((item) => statuses.find((s) => s.id === item.id) || item));
   }, [statuses]);
 
   const markStatusViewed = (status: StatusItem) => {
@@ -178,7 +215,6 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     }
   };
 
-  // Auto-advance segmented progress bar for text / image statuses
   useEffect(() => {
     if (!activeStatus || showViewersList || activeStatus.mediaType === 'video') return;
     setProgressPct(0);
@@ -195,15 +231,23 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     return () => window.clearInterval(timer);
   }, [activeStatus?.id, viewerPos, showViewersList]);
 
-  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMediaPick = async (e: React.ChangeEvent<HTMLInputElement>, expectedType: 'image' | 'video') => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setComposerErr(null);
     setSelectedFile(file);
-    setMediaType(file.type.startsWith('video') ? 'video' : 'image');
+    setMediaType(expectedType);
     setPreviewUrl(URL.createObjectURL(file));
-    e.target.value = '';
+    setVideoDuration(0);
+    setVideoThumbBlob(null);
+
+    if (expectedType === 'video') {
+      const meta = await extractVideoMetadata(file);
+      setVideoDuration(meta.durationSeconds);
+      setVideoThumbBlob(meta.thumbnailBlob);
+    }
   };
 
   const publishStatus = async (e: React.FormEvent) => {
@@ -211,31 +255,53 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
     setComposerErr(null);
 
     if (mediaType === 'text' && !textContent.trim()) {
-      setComposerErr('Please write a message or tap one of the quick status options.');
+      setComposerErr('Please write text for your status.');
       return;
     }
     if (mediaType !== 'text' && !selectedFile) {
-      setComposerErr('Please choose a photo or video first.');
+      setComposerErr(`Please choose a ${mediaType === 'video' ? 'video' : 'photo'} first.`);
       return;
     }
 
     setSubmitting(true);
     try {
       let mediaUrl: string | null = null;
+      let thumbnailUrl: string | null = null;
       if (selectedFile) {
-        const up = await uploadMediaFile(selectedFile, selectedFile.name, (pct) => {
-          setUploadProgress(pct);
-        });
+        const up = await uploadMediaFile(
+          selectedFile,
+          selectedFile.name,
+          (pct) => setUploadProgress(pct),
+          'user-status'
+        );
         mediaUrl = up.fileUrl;
+
+        if (mediaType === 'video' && videoThumbBlob) {
+          try {
+            const thumbUp = await uploadMediaFile(
+              videoThumbBlob,
+              `status-thumb-${Date.now()}.jpg`,
+              undefined,
+              'user-status'
+            );
+            thumbnailUrl = thumbUp.fileUrl;
+          } catch {
+            // Non-fatal thumbnail error
+          }
+        }
       }
+
       await apiFetch('/api/statuses', {
         method: 'POST',
         body: JSON.stringify({
           mediaType,
           content: textContent.trim(),
           mediaUrl,
+          thumbnailUrl,
+          durationSeconds: mediaType === 'video' && videoDuration > 0 ? videoDuration : undefined,
           caption: caption.trim(),
           backgroundColor: bgColor,
+          fontStyle,
           privacy,
         }),
       });
@@ -243,7 +309,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
       setCaption('');
       closeComposer();
       await loadStatuses();
-      showToast('Status shared for 24 hours!');
+      showToast('Status published for 24 hours.');
     } catch (err: any) {
       setComposerErr(formatStatusErr(err));
     } finally {
@@ -311,7 +377,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
       key={st.id}
       type="button"
       onClick={() => openViewer(st)}
-      className="flex w-full items-center justify-between p-3.5 text-left transition hover:bg-black/3 dark:hover:bg-white/5"
+      className="flex w-full items-center justify-between p-3.5 text-left transition hover:bg-black/3 dark:hover:bg-white/5 cursor-pointer"
     >
       <div className="flex items-center gap-3.5 min-w-0">
         <div
@@ -339,7 +405,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
           <p className="truncate text-xs text-slate-500 dark:text-[#9898A6]">
             {st.mediaType === 'text'
               ? st.content.slice(0, 48)
-              : st.caption || `${st.mediaType} update`}{' '}
+              : st.caption || `${st.mediaType === 'video' ? 'Video' : 'Photo'} status`}{' '}
             · {hoursLeft(st.expiresAt)}h left
           </p>
         </div>
@@ -350,22 +416,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-white dark:bg-[#0B0B0E] p-4 sm:p-6">
       <div className="mx-auto w-full max-w-3xl space-y-5">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-display text-2xl font-bold">Updates</h2>
-            <p className="text-xs text-slate-500 dark:text-[#9898A6] mt-0.5">
-              Share quick text, photo, or video updates for 24 hours
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={openComposer}
-            className="flex min-h-[44px] shrink-0 items-center gap-2 rounded-xl bg-[#D4AF37] px-4 text-xs font-semibold text-[#09090B] hover:bg-[#E5C76B]"
-          >
-            <Plus size={16} />
-            <span>Add Status</span>
-          </button>
-        </div>
+        <h2 className="font-display text-2xl font-bold">Updates</h2>
 
         {successMsg && (
           <div className="flex items-center gap-2 rounded-xl border border-[#22C55E]/35 bg-[#22C55E]/10 px-4 py-2.5 text-xs font-medium text-[#22C55E]">
@@ -380,19 +431,26 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
           </div>
         )}
 
-        {/* My Status */}
-        <div className="rounded-2xl border border-black/8 dark:border-white/10 bg-slate-50 dark:bg-[#141418] p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3.5">
-              <button
-                type="button"
-                onClick={() => (myStatuses[0] ? openViewer(myStatuses[0]) : openComposer())}
+        {/* My Status — Minimal WhatsApp-style Section */}
+        <div className="relative rounded-2xl border border-black/8 dark:border-white/10 bg-slate-50 dark:bg-[#141418] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => (myStatuses[0] ? openViewer(myStatuses[0]) : setAddMenuOpen((v) => !v))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  myStatuses[0] ? openViewer(myStatuses[0]) : setAddMenuOpen((v) => !v);
+                }
+              }}
+              className="flex flex-1 items-center gap-3.5 cursor-pointer"
+            >
+              <div
                 className={`relative h-14 w-14 shrink-0 rounded-full p-[2px] ${
                   myStatuses.length > 0
                     ? 'border-2 border-[#22C55E]'
                     : 'border border-dashed border-[#D4AF37]'
                 }`}
-                aria-label={myStatuses[0] ? 'View my status' : 'Add status'}
               >
                 <div className="h-full w-full overflow-hidden rounded-full bg-[#09090B]">
                   {me.avatarUrl ? (
@@ -408,46 +466,59 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                     </div>
                   )}
                 </div>
-                <span
+                <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openComposer();
+                    setAddMenuOpen((v) => !v);
                   }}
-                  className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white dark:border-[#141418] bg-[#22C55E] text-[#09090B]"
-                  title="Add new status"
+                  className="absolute -bottom-0.5 -right-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white dark:border-[#141418] bg-[#22C55E] text-[#09090B] shadow-md hover:scale-105 transition-transform cursor-pointer"
+                  aria-label="Add status"
+                  title="Add status"
                 >
-                  <Plus size={12} strokeWidth={3} />
-                </span>
-              </button>
-              <div>
+                  <Plus size={13} strokeWidth={3} />
+                </button>
+              </div>
+              <div className="min-w-0">
                 <p className="font-semibold text-sm">My Status</p>
-                <p className="text-xs text-slate-500 dark:text-[#9898A6]">
+                <p className="text-xs text-slate-500 dark:text-[#9898A6] truncate">
                   {myStatuses.length > 0
-                    ? `${myStatuses.length} active · ${hoursLeft(myStatuses[0].expiresAt)}h remaining`
-                    : 'Tap + to share a quick update'}
+                    ? `${myStatuses.length} active · ${hoursLeft(myStatuses[0].expiresAt)}h left`
+                    : 'Tap + to add photo, video or text status'}
                 </p>
               </div>
             </div>
+          </div>
 
-            <div className="flex items-center gap-2">
-              {myStatuses.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => openViewer(myStatuses[0])}
-                  className="min-h-[40px] rounded-xl border border-black/10 dark:border-white/15 px-3 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/5"
-                >
-                  View ({myStatuses[0].viewCount})
-                </button>
-              )}
+          {/* 3-Item Compact Add Menu */}
+          {addMenuOpen && (
+            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-black/8 dark:border-white/10 pt-3">
               <button
                 type="button"
-                onClick={openComposer}
-                className="min-h-[40px] rounded-xl bg-[#D4AF37]/15 px-3 text-xs font-semibold text-[#B8891F] dark:text-[#F5E6B3] hover:bg-[#D4AF37]/25"
+                onClick={() => openComposerMode('image')}
+                className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#0B0B0E] px-3 text-xs font-semibold hover:border-[#D4AF37]/60 cursor-pointer"
               >
-                + New
+                <ImagePlus size={15} className="text-[#D4AF37]" />
+                <span>Photo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => openComposerMode('video')}
+                className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#0B0B0E] px-3 text-xs font-semibold hover:border-[#D4AF37]/60 cursor-pointer"
+              >
+                <Video size={15} className="text-purple-400" />
+                <span>Video</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => openComposerMode('text')}
+                className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#0B0B0E] px-3 text-xs font-semibold hover:border-[#D4AF37]/60 cursor-pointer"
+              >
+                <Type size={15} className="text-emerald-400" />
+                <span>Text</span>
               </button>
             </div>
-          </div>
+          )}
 
           {myStatuses.length > 0 && (
             <div className="mt-3 grid gap-2 border-t border-black/8 dark:border-white/10 pt-3 sm:grid-cols-2">
@@ -459,19 +530,19 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   <button
                     type="button"
                     onClick={() => openViewer(st)}
-                    className="min-w-0 flex-1 text-left"
+                    className="min-w-0 flex-1 text-left cursor-pointer"
                   >
                     <p className="truncate text-xs font-semibold">
-                      {st.mediaType === 'text' ? st.content : st.caption || `${st.mediaType} update`}
+                      {st.mediaType === 'text' ? st.content : st.caption || `${st.mediaType} status`}
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-[#9898A6]">
-                      {hoursLeft(st.expiresAt)}h left · {st.viewCount} views · {st.privacy === 'everyone' ? 'Everyone' : 'Friends'}
+                      {hoursLeft(st.expiresAt)}h left · {st.viewCount} views
                     </p>
                   </button>
                   <button
                     type="button"
                     onClick={() => deleteStatus(st.id)}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-red-400 hover:bg-red-500/15"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-red-400 hover:bg-red-500/15 cursor-pointer"
                     aria-label="Delete status"
                     title="Delete status"
                   >
@@ -492,7 +563,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             <p className="text-sm text-slate-500">Loading updates...</p>
           ) : recentStatuses.length === 0 ? (
             <div className="rounded-2xl border border-black/8 dark:border-white/10 p-6 text-center text-sm text-slate-500 dark:text-[#9898A6]">
-              No unread updates from friends right now.
+              No unread updates right now.
             </div>
           ) : (
             <div className="divide-y divide-black/6 dark:divide-white/8 rounded-2xl border border-black/8 dark:border-white/10 bg-white dark:bg-[#141418]">
@@ -505,7 +576,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
         {viewedStatuses.length > 0 && (
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9898A6] mb-3">
-              Viewed Updates ({viewedStatuses.length})
+              Viewed Updates
             </h3>
             <div className="divide-y divide-black/6 dark:divide-white/8 rounded-2xl border border-black/8 dark:border-white/10 bg-white/70 dark:bg-[#141418]/70 opacity-85">
               {viewedStatuses.map((st) => renderStatusRow(st, true))}
@@ -517,7 +588,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
         {mutedStatuses.length > 0 && (
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9898A6] mb-2">
-              Muted Updates ({mutedStatuses.length})
+              Muted Updates
             </h3>
             <div className="space-y-2 opacity-65">
               {mutedStatuses.map((st) => (
@@ -525,13 +596,13 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   key={st.id}
                   className="flex w-full items-center justify-between rounded-xl border border-black/10 dark:border-white/10 p-3 text-xs"
                 >
-                  <button type="button" onClick={() => openViewer(st)} className="font-medium hover:underline">
+                  <button type="button" onClick={() => openViewer(st)} className="font-medium hover:underline cursor-pointer">
                     {st.authorName}
                   </button>
                   <button
                     type="button"
                     onClick={() => muteStatus(st.id)}
-                    className="text-[#D4AF37] hover:underline"
+                    className="text-[#D4AF37] hover:underline cursor-pointer"
                   >
                     Unmute
                   </button>
@@ -550,11 +621,13 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             className="w-full max-w-md rounded-2xl border border-[#D4AF37]/25 bg-[#111115] p-5 sm:p-6 text-white shadow-2xl"
           >
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
-              <h3 className="font-display text-lg font-semibold">Add Status Update</h3>
+              <h3 className="font-display text-lg font-semibold">
+                {mediaType === 'image' ? 'Photo Status' : mediaType === 'video' ? 'Video Status' : 'Text Status'}
+              </h3>
               <button
                 type="button"
                 onClick={closeComposer}
-                className="flex h-10 w-10 items-center justify-center rounded-xl text-[#9898A6] hover:text-white"
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-[#9898A6] hover:text-white cursor-pointer"
               >
                 <X size={20} />
               </button>
@@ -566,37 +639,55 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               </div>
             )}
 
-            <div className="mt-4 flex gap-2">
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
+              className="hidden"
+              onChange={(e) => handleMediaPick(e, 'image')}
+            />
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/mp4,video/webm,video/quicktime,video/*"
+              className="hidden"
+              onChange={(e) => handleMediaPick(e, 'video')}
+            />
+
+            <div className="mt-4 grid grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setMediaType('text');
-                  clearPreview();
-                  setComposerErr(null);
-                }}
-                className={`flex-1 min-h-[42px] rounded-xl text-xs font-semibold ${
+                onClick={() => openComposerMode('image')}
+                className={`min-h-[40px] rounded-xl text-xs font-semibold cursor-pointer ${
+                  mediaType === 'image' ? 'bg-[#D4AF37] text-[#09090B]' : 'bg-white/5 text-[#9898A6]'
+                }`}
+              >
+                Photo
+              </button>
+              <button
+                type="button"
+                onClick={() => openComposerMode('video')}
+                className={`min-h-[40px] rounded-xl text-xs font-semibold cursor-pointer ${
+                  mediaType === 'video' ? 'bg-[#D4AF37] text-[#09090B]' : 'bg-white/5 text-[#9898A6]'
+                }`}
+              >
+                Video
+              </button>
+              <button
+                type="button"
+                onClick={() => openComposerMode('text')}
+                className={`min-h-[40px] rounded-xl text-xs font-semibold cursor-pointer ${
                   mediaType === 'text' ? 'bg-[#D4AF37] text-[#09090B]' : 'bg-white/5 text-[#9898A6]'
                 }`}
               >
-                Text Status
+                Text
               </button>
-              <label
-                className={`flex flex-1 min-h-[42px] cursor-pointer items-center justify-center gap-1.5 rounded-xl text-xs font-semibold ${
-                  mediaType !== 'text'
-                    ? 'bg-[#D4AF37] text-[#09090B]'
-                    : 'bg-white/5 text-[#F5E6B3] hover:bg-white/10'
-                }`}
-              >
-                <ImagePlus size={15} />
-                <span>Photo / Video</span>
-                <input type="file" accept="image/*,video/*" className="hidden" onChange={handleFilePick} />
-              </label>
             </div>
 
             {mediaType === 'text' ? (
               <div className="mt-4 space-y-3">
                 <div
-                  className="flex min-h-[150px] items-center justify-center rounded-2xl p-5"
+                  className="flex min-h-[160px] items-center justify-center rounded-2xl p-5"
                   style={{ backgroundColor: bgColor }}
                 >
                   <textarea
@@ -604,45 +695,50 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                     value={textContent}
                     onChange={(e) => setTextContent(e.target.value)}
                     placeholder="Type your status here..."
-                    className="w-full resize-none bg-transparent text-center font-display text-xl font-semibold text-white placeholder-white/45 focus:outline-none"
+                    className={`w-full resize-none bg-transparent text-center text-xl text-white placeholder-white/45 focus:outline-none ${getFontStyleClass(fontStyle)}`}
                   />
                 </div>
 
-                {/* Quick Emoji Bar */}
+                {/* Text Style Selector */}
+                <div className="flex items-center justify-center gap-1.5">
+                  {FONT_STYLE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setFontStyle(opt.id)}
+                      className={`rounded-lg px-3 py-1.5 text-xs transition cursor-pointer ${
+                        fontStyle === opt.id
+                          ? 'bg-[#D4AF37] text-[#09090B] font-semibold'
+                          : 'bg-white/5 text-[#9898A6] hover:bg-white/10'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Emoji Bar */}
                 <div className="flex justify-center gap-1.5">
                   {COMPOSER_EMOJIS.map((em) => (
                     <button
                       key={em}
                       type="button"
                       onClick={() => setTextContent((t) => `${t}${em}`)}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-base hover:bg-white/15"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-base hover:bg-white/15 cursor-pointer"
                     >
                       {em}
                     </button>
                   ))}
                 </div>
 
-                {/* Quick Presets */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {QUICK_PRESETS.map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setTextContent(preset)}
-                      className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-2 text-xs text-[#F5E6B3] hover:border-[#D4AF37]/50 hover:bg-white/10"
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-
+                {/* Background Swatches */}
                 <div className="flex items-center justify-center gap-2.5 pt-1">
                   {STATUS_COLORS.map((c) => (
                     <button
                       key={c}
                       type="button"
                       onClick={() => setBgColor(c)}
-                      className={`h-7 w-7 rounded-full border-2 ${
+                      className={`h-7 w-7 rounded-full border-2 cursor-pointer ${
                         bgColor === c ? 'border-[#D4AF37] scale-110' : 'border-white/20'
                       }`}
                       style={{ backgroundColor: c }}
@@ -653,25 +749,51 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               </div>
             ) : (
               <div className="mt-4 space-y-3">
-                {previewUrl && (
+                {previewUrl ? (
                   <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black max-h-60 flex justify-center">
                     {mediaType === 'video' ? (
-                      <video src={previewUrl} controls className="max-h-60" />
+                      <div className="relative w-full flex justify-center">
+                        <video src={previewUrl} controls playsInline className="max-h-60 w-full" />
+                        {videoDuration > 0 && (
+                          <span className="absolute top-2 left-2 rounded-md bg-black/75 px-2 py-0.5 text-[11px] font-medium tabular-nums">
+                            {formatMediaDuration(videoDuration)}
+                          </span>
+                        )}
+                      </div>
                     ) : (
                       <img src={previewUrl} alt="Status preview" className="max-h-60 object-contain" />
                     )}
                     <button
                       type="button"
-                      onClick={() => {
-                        clearPreview();
-                        setMediaType('text');
-                      }}
-                      className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/75 text-white hover:bg-black"
+                      onClick={clearPreview}
+                      className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/75 text-white hover:bg-black cursor-pointer"
                       aria-label="Remove media"
                     >
                       <X size={15} />
                     </button>
                   </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      mediaType === 'video' ? videoInputRef.current?.click() : photoInputRef.current?.click()
+                    }
+                    className="flex h-40 w-full flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#D4AF37]/40 bg-[#09090B] text-xs font-medium text-[#F5E6B3] hover:border-[#D4AF37] cursor-pointer"
+                  >
+                    {mediaType === 'video' ? <Video size={26} className="text-[#D4AF37]" /> : <ImagePlus size={26} className="text-[#D4AF37]" />}
+                    <span>{mediaType === 'video' ? 'Choose Video from Device' : 'Choose Photo from Device'}</span>
+                  </button>
+                )}
+                {previewUrl && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      mediaType === 'video' ? videoInputRef.current?.click() : photoInputRef.current?.click()
+                    }
+                    className="text-xs font-medium text-[#D4AF37] hover:underline cursor-pointer"
+                  >
+                    Choose a different {mediaType === 'video' ? 'video' : 'photo'}
+                  </button>
                 )}
                 <input
                   type="text"
@@ -713,9 +835,9 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             <button
               type="submit"
               disabled={submitting}
-              className="mt-4 min-h-[46px] w-full rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] disabled:opacity-50"
+              className="mt-4 min-h-[46px] w-full rounded-xl bg-[#D4AF37] text-sm font-semibold text-[#09090B] hover:bg-[#E5C76B] disabled:opacity-50 cursor-pointer"
             >
-              {submitting ? 'Sharing...' : 'Share Status (24h)'}
+              {submitting ? 'Publishing...' : composerErr ? 'Retry Upload' : 'Share Status (24h)'}
             </button>
           </form>
         </div>
@@ -724,7 +846,6 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
       {/* Fullscreen Segmented Status Viewer */}
       {activeStatus && (
         <div className="fixed inset-0 z-50 flex flex-col bg-[#060608] text-white">
-          {/* Segmented Progress Bars */}
           <div className="flex gap-1.5 px-4 pt-3">
             {viewerQueue.map((item, i) => {
               const fill = i < viewerPos ? 100 : i === viewerPos ? progressPct : 0;
@@ -769,7 +890,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   <button
                     type="button"
                     onClick={() => setShowViewersList(!showViewersList)}
-                    className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-white/15 px-3 text-xs"
+                    className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-white/15 px-3 text-xs cursor-pointer"
                   >
                     <Eye size={14} />
                     <span>{activeStatus.viewCount}</span>
@@ -777,7 +898,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   <button
                     type="button"
                     onClick={() => deleteStatus(activeStatus.id)}
-                    className="flex h-10 w-10 items-center justify-center rounded-lg text-red-400 hover:bg-red-500/15"
+                    className="flex h-10 w-10 items-center justify-center rounded-lg text-red-400 hover:bg-red-500/15 cursor-pointer"
                     aria-label="Delete status"
                   >
                     <Trash2 size={17} />
@@ -787,7 +908,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                 <button
                   type="button"
                   onClick={() => muteStatus(activeStatus.id)}
-                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-white/15 px-3 text-xs text-[#9898A6] hover:text-white"
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-white/15 px-3 text-xs text-[#9898A6] hover:text-white cursor-pointer"
                 >
                   <VolumeX size={14} />
                   <span>{activeStatus.isMuted ? 'Unmute' : 'Mute'}</span>
@@ -796,7 +917,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               <button
                 type="button"
                 onClick={closeViewer}
-                className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-white/10"
+                className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-white/10 cursor-pointer"
                 aria-label="Close viewer"
               >
                 <X size={20} />
@@ -810,12 +931,11 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               backgroundColor: activeStatus.mediaType === 'text' ? activeStatus.backgroundColor : '#060608',
             }}
           >
-            {/* Left / Right navigation tap controls */}
             {viewerPos > 0 && (
               <button
                 type="button"
                 onClick={goPrevStory}
-                className="absolute left-3 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/75"
+                className="absolute left-3 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/75 cursor-pointer"
                 aria-label="Previous status"
               >
                 <ChevronLeft size={20} />
@@ -824,14 +944,18 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             <button
               type="button"
               onClick={goNextStory}
-              className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/75"
+              className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/75 cursor-pointer"
               aria-label="Next status"
             >
               <ChevronRight size={20} />
             </button>
 
             {activeStatus.mediaType === 'text' && (
-              <p className="max-w-xl text-center font-display text-2xl sm:text-3xl font-semibold leading-relaxed">
+              <p
+                className={`max-w-xl text-center text-2xl sm:text-3xl leading-relaxed ${getFontStyleClass(
+                  activeStatus.fontStyle
+                )}`}
+              >
                 {activeStatus.content}
               </p>
             )}
@@ -845,7 +969,9 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
             {activeStatus.mediaType === 'video' && activeStatus.mediaUrl && (
               <video
                 src={activeStatus.mediaUrl}
+                poster={activeStatus.thumbnailUrl || undefined}
                 controls
+                playsInline
                 autoPlay
                 onEnded={goNextStory}
                 className="max-h-[70vh] max-w-full rounded-xl"
@@ -857,7 +983,6 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
               </div>
             )}
 
-            {/* Viewers Drawer for own status */}
             {showViewersList && activeStatus.userId === me.id && (
               <div className="absolute bottom-4 left-1/2 z-20 w-full max-w-md -translate-x-1/2 rounded-2xl border border-white/15 bg-[#111115] p-4 shadow-2xl">
                 <p className="text-xs font-semibold uppercase tracking-wider text-[#D4AF37] mb-2">
@@ -888,7 +1013,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                       key={em}
                       type="button"
                       onClick={() => reactToStatus(em)}
-                      className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-lg hover:bg-white/20"
+                      className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-lg hover:bg-white/20 cursor-pointer"
                     >
                       {em}
                     </button>
@@ -904,7 +1029,7 @@ export const UpdatesView: React.FC<UpdatesViewProps> = ({ me, onReplyInChat }) =
                   />
                   <button
                     type="submit"
-                    className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#D4AF37] text-[#09090B]"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#D4AF37] text-[#09090B] cursor-pointer"
                     aria-label="Send status reply"
                   >
                     <Send size={16} />

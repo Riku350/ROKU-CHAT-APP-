@@ -119,12 +119,17 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   };
 
   const updateAvatar = async (url: string | null) => {
-    const res = await apiFetch<{ profile: UserProfile }>('/api/profiles/me', {
-      method: 'PATCH',
-      body: JSON.stringify({ avatarUrl: url }),
-    });
-    onProfileUpdated({ ...me, ...res.profile });
-    notifySaved('Profile picture updated.');
+    try {
+      const res = await apiFetch<{ profile: UserProfile }>('/api/profiles/me', {
+        method: 'PATCH',
+        body: JSON.stringify({ avatarUrl: url }),
+      });
+      onProfileUpdated({ ...me, ...res.profile });
+      notifySaved(url ? 'Profile picture updated.' : 'Profile picture removed.');
+    } catch (err: any) {
+      setError(err?.message || 'Could not update profile picture.');
+      throw err;
+    }
   };
 
   const patchSettings = async (patch: Record<string, any>) => {
@@ -377,6 +382,38 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
           {section === 'edit_profile' && (
             <form onSubmit={saveProfileInfo} className="space-y-4">
+              <div className="flex items-center gap-4 rounded-2xl border border-black/8 dark:border-white/10 p-3.5">
+                {me.avatarUrl ? (
+                  <img
+                    src={me.avatarUrl}
+                    alt={me.fullName}
+                    referrerPolicy="no-referrer"
+                    className="h-14 w-14 rounded-full object-cover border border-[#D4AF37]/40 shrink-0"
+                  />
+                ) : (
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#D4AF37]/15 text-lg font-bold text-[#D4AF37] shrink-0">
+                    {me.fullName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCropperOpen(true)}
+                    className="min-h-[38px] rounded-xl bg-[#D4AF37]/15 px-3 text-xs font-semibold text-[#D4AF37] hover:bg-[#D4AF37]/25 cursor-pointer"
+                  >
+                    Change Photo
+                  </button>
+                  {me.avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={() => updateAvatar(null).catch(() => {})}
+                      className="min-h-[38px] rounded-xl border border-red-500/25 px-3 text-xs font-medium text-red-400 hover:bg-red-500/10 cursor-pointer"
+                    >
+                      Remove Photo
+                    </button>
+                  )}
+                </div>
+              </div>
               <div>
                 <label className="block text-xs text-slate-500 dark:text-[#9898A6] mb-1">Full Name</label>
                 <input

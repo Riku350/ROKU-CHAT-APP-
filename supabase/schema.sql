@@ -618,3 +618,34 @@ create or replace view public.chat_requests as
   select id, sender_id, receiver_id, status, created_at, updated_at
   from public.friend_requests;
 
+-- ----------------------------------------------------------------------------
+-- DEDICATED MEDIA BUCKETS, POLICIES & MEDIA COLUMNS (20261114 REPAIR)
+-- ----------------------------------------------------------------------------
+insert into storage.buckets (id, name, public)
+values
+  ('profile-photos', 'profile-photos', true),
+  ('chat-media', 'chat-media', true),
+  ('chat-documents', 'chat-documents', true),
+  ('voice-messages', 'voice-messages', true),
+  ('user-status', 'user-status', true)
+on conflict (id) do nothing;
+
+alter table if exists public.messages
+  add column if not exists media_url text,
+  add column if not exists file_name text,
+  add column if not exists file_size bigint,
+  add column if not exists mime_type text,
+  add column if not exists duration int,
+  add column if not exists thumbnail_url text,
+  add column if not exists delivery_status text not null default 'sent';
+
+alter table if exists public.statuses
+  add column if not exists font_style text not null default 'sans',
+  add column if not exists duration int,
+  add column if not exists thumbnail_url text;
+
+alter table if exists public.attachments
+  add column if not exists bucket_name text,
+  add column if not exists storage_path text,
+  add column if not exists thumbnail_url text,
+  add column if not exists duration int;

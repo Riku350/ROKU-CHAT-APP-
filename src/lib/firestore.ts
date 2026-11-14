@@ -86,19 +86,22 @@ const RIKZEN_ID_RE = /^RIKZEN-[A-Z0-9]{4,12}$/;
 
 export function sanitizeAvatarUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;
-  if (url.startsWith('data:') || url.length > 512) return null;
+  if (url.startsWith('data:') || url.startsWith('blob:') || url.length > 2048) return null;
   return url;
 }
 
 export function sanitizeMediaUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;
-  if (url.startsWith('data:') || url.length > 1024) return null;
+  if (url.startsWith('data:') || url.startsWith('blob:') || url.length > 2048) return null;
   return url;
 }
 
 export interface PeerPresenceSnapshot {
   isOnline: boolean;
   updatedAt: string;
+  avatarUrl?: string | null;
+  fullName?: string;
+  bio?: string;
   typingInConversationId?: string | null;
   typingActivity?: 'typing' | 'recording' | 'idle' | null;
   typingUpdatedAt?: string | null;
@@ -167,6 +170,9 @@ export function subscribePeerProfilesFirestore(
         onUpdate(uid, {
           isOnline: onlinePrivacy === 'nobody' ? false : Boolean(d.isOnline),
           updatedAt: seenPrivacy === 'nobody' ? '' : updatedIso,
+          avatarUrl: sanitizeAvatarUrl(d.avatarUrl as string | null | undefined),
+          fullName: typeof d.fullName === 'string' ? d.fullName : undefined,
+          bio: typeof d.bio === 'string' ? d.bio : undefined,
           typingInConversationId: (d.typingInConversationId as string | null) || null,
           typingActivity: (d.typingActivity as 'typing' | 'recording' | 'idle' | null) || 'idle',
           typingUpdatedAt: typingIso,

@@ -518,6 +518,15 @@ export const AuthFlow: React.FC<AuthFlowProps> = ({ initialProfile, onAuthentica
                     </span>
                   </button>
                   <span className="mt-1.5 text-xs text-[#9898A6]">Upload or capture profile photo</span>
+                  {avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setAvatarUrl(null)}
+                      className="mt-1 text-xs text-red-400 hover:underline cursor-pointer"
+                    >
+                      Remove Photo
+                    </button>
+                  )}
                 </div>
 
                 <div>

@@ -207,8 +207,13 @@ export default function App() {
           c.peer && c.peer.id === uid
             ? {
                 ...c,
+                ...(snap.fullName ? { title: snap.fullName } : {}),
+                ...(snap.avatarUrl !== undefined ? { avatarUrl: snap.avatarUrl } : {}),
                 peer: {
                   ...c.peer,
+                  ...(snap.fullName ? { fullName: snap.fullName } : {}),
+                  ...(snap.avatarUrl !== undefined ? { avatarUrl: snap.avatarUrl } : {}),
+                  ...(snap.bio !== undefined ? { bio: snap.bio } : {}),
                   isOnline: snap.isOnline,
                   lastSeenAt: snap.updatedAt || c.peer.lastSeenAt,
                   typingInConversationId: snap.typingInConversationId,
@@ -311,6 +316,24 @@ export default function App() {
         const notif = payload as AppNotification;
         setNotifications((prev) => [notif, ...prev]);
         triggerDesktopNotification(notif.title, notif.body);
+      } else if (event === 'profile:updated') {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.peer && c.peer.id === payload.userId
+              ? {
+                  ...c,
+                  ...(payload.fullName ? { title: payload.fullName } : {}),
+                  ...(payload.avatarUrl !== undefined ? { avatarUrl: payload.avatarUrl } : {}),
+                  peer: {
+                    ...c.peer,
+                    ...(payload.fullName ? { fullName: payload.fullName } : {}),
+                    ...(payload.avatarUrl !== undefined ? { avatarUrl: payload.avatarUrl } : {}),
+                    ...(payload.bio !== undefined ? { bio: payload.bio } : {}),
+                  },
+                }
+              : c
+          )
+        );
       } else if (event === 'presence:update') {
         setConversations((prev) =>
           prev.map((c) =>

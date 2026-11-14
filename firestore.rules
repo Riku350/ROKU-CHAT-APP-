@@ -69,7 +69,7 @@ service cloud.firestore {
         data.rikzenId is string && data.rikzenId.size() >= 8 && data.rikzenId.size() <= 24 &&
         data.rikzenId.matches('^RIKZEN-[A-Z0-9]{4,12}$') &&
         data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 80 &&
-        (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 512)) &&
+        (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 2048)) &&
         (!('bio' in data) || (data.bio is string && data.bio.size() <= 220)) &&
         data.onboardingCompleted is bool &&
         (!('isOnline' in data) || data.isOnline is bool) &&
@@ -143,7 +143,7 @@ service cloud.firestore {
         data.type is string && data.type in ['direct', 'group'] &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
         (!('description' in data) || (data.description is string && data.description.size() <= 500)) &&
-        (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 512)) &&
+        (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 2048)) &&
         (!('inviteCode' in data) || data.inviteCode == null || (data.inviteCode is string && data.inviteCode.size() <= 32)) &&
         (!('onlyAdminsMessage' in data) || data.onlyAdminsMessage is bool) &&
         (!('onlyAdminsEditInfo' in data) || data.onlyAdminsEditInfo is bool) &&
@@ -185,7 +185,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'conversationId', 'senderUid', 'recipientUid', 'memberUids',
           'content', 'messageType', 'replyToId', 'replyToText', 'replyToSender', 'replyToType',
-          'forwardedFromId', 'fileUrl', 'fileName', 'mimeType', 'sizeBytes',
+          'forwardedFromId', 'fileUrl', 'thumbnailUrl', 'fileName', 'mimeType', 'sizeBytes',
           'durationSeconds', 'latitude', 'longitude',
           'isEdited', 'isDeleted', 'isPinned', 'starredBy', 'deletedForUids', 'reactions',
           'deliveredAt', 'readAt', 'expiresAt', 'createdAt', 'updatedAt'
@@ -202,7 +202,8 @@ service cloud.firestore {
         (!('replyToSender' in data) || data.replyToSender == null || (data.replyToSender is string && data.replyToSender.size() <= 80)) &&
         (!('replyToType' in data) || data.replyToType == null || (data.replyToType is string && data.replyToType.size() <= 32)) &&
         (!('forwardedFromId' in data) || data.forwardedFromId == null || (data.forwardedFromId is string && data.forwardedFromId.size() <= 128)) &&
-        (!('fileUrl' in data) || data.fileUrl == null || (data.fileUrl is string && data.fileUrl.size() <= 1024)) &&
+        (!('fileUrl' in data) || data.fileUrl == null || (data.fileUrl is string && data.fileUrl.size() <= 2048)) &&
+        (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 2048)) &&
         (!('fileName' in data) || data.fileName == null || (data.fileName is string && data.fileName.size() <= 200)) &&
         (!('mimeType' in data) || data.mimeType == null || (data.mimeType is string && data.mimeType.size() <= 120)) &&
         (!('sizeBytes' in data) || data.sizeBytes is int) &&
@@ -225,16 +226,19 @@ service cloud.firestore {
     function isValidStatusUpdate(data) {
       return data.keys().hasAll(['id', 'authorUid', 'mediaType', 'expiresAt', 'createdAt']) &&
         data.keys().hasOnly([
-          'id', 'authorUid', 'mediaType', 'content', 'mediaUrl',
-          'caption', 'backgroundColor', 'privacy', 'expiresAt', 'createdAt'
+          'id', 'authorUid', 'mediaType', 'content', 'mediaUrl', 'thumbnailUrl',
+          'caption', 'backgroundColor', 'fontStyle', 'durationSeconds', 'privacy', 'expiresAt', 'createdAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.authorUid) &&
         data.mediaType is string && data.mediaType in ['text', 'image', 'video'] &&
         (!('content' in data) || (data.content is string && data.content.size() <= 1000)) &&
-        (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 1024)) &&
+        (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2048)) &&
+        (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 2048)) &&
         (!('caption' in data) || (data.caption is string && data.caption.size() <= 300)) &&
         (!('backgroundColor' in data) || (data.backgroundColor is string && data.backgroundColor.size() <= 32)) &&
+        (!('fontStyle' in data) || (data.fontStyle is string && data.fontStyle in ['sans', 'serif', 'bold', 'mono'])) &&
+        (!('durationSeconds' in data) || data.durationSeconds is int) &&
         (!('privacy' in data) || (data.privacy is string && data.privacy in ['everyone', 'friends', 'contacts', 'selected'])) &&
         data.expiresAt is timestamp &&
         data.createdAt is timestamp &&
@@ -246,7 +250,7 @@ service cloud.firestore {
         data.keys().hasOnly(['viewerUid', 'viewerName', 'viewerAvatar', 'viewerRikzenId', 'reaction', 'viewedAt']) &&
         isValidId(data.viewerUid) &&
         (!('viewerName' in data) || (data.viewerName is string && data.viewerName.size() <= 80)) &&
-        (!('viewerAvatar' in data) || data.viewerAvatar == null || (data.viewerAvatar is string && data.viewerAvatar.size() <= 512)) &&
+        (!('viewerAvatar' in data) || data.viewerAvatar == null || (data.viewerAvatar is string && data.viewerAvatar.size() <= 2048)) &&
         (!('viewerRikzenId' in data) || (data.viewerRikzenId is string && data.viewerRikzenId.size() <= 24)) &&
         (!('reaction' in data) || data.reaction == null || (data.reaction is string && data.reaction.size() <= 16)) &&
         data.viewedAt is timestamp;

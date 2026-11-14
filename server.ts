@@ -37,8 +37,27 @@ app.use(cookieParser());
 const uploadsDir = getUploadsDir();
 app.use('/uploads', express.static(uploadsDir));
 
+const VALID_UPLOAD_BUCKETS = new Set([
+  'profile-photos',
+  'chat-media',
+  'chat-documents',
+  'voice-messages',
+  'user-status',
+  'uploads',
+]);
+
+function resolveUploadBucket(raw?: unknown): string {
+  const b = typeof raw === 'string' ? raw.trim() : '';
+  return VALID_UPLOAD_BUCKETS.has(b) ? b : 'uploads';
+}
+
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  destination: (req, _file, cb) => {
+    const bucket = resolveUploadBucket(req.query?.bucket || req.body?.bucket);
+    const dir = path.join(uploadsDir, bucket);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '').slice(0, 12);
     cb(null, `${Date.now()}-${crypto.randomUUID().slice(0, 8)}${ext}`);
@@ -47,7 +66,20 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mime = (file.mimetype || '').toLowerCase();
+    if (
+      mime === 'text/html' ||
+      mime === 'application/javascript' ||
+      mime === 'text/javascript' ||
+      mime === 'application/x-msdownload'
+    ) {
+      cb(new Error('This file type is not permitted for security reasons.'));
+      return;
+    }
+    cb(null, true);
+  },
 });
 
 function formatOwnProfile(row: any) {
@@ -316,6 +348,10 @@ app.post('/api/auth/complete-onboarding', requireAuth, (req: AuthedRequest, res)
   }
   const now = new Date().toISOString();
   const cleanPhone = phone ? String(phone).trim() : null;
+  const cleanAvatar =
+    typeof avatarUrl === 'string' && !avatarUrl.startsWith('blob:') && !avatarUrl.startsWith('data:')
+      ? avatarUrl
+      : null;
   db.prepare(
     `UPDATE profiles
      SET full_name = ?, phone = ?, phone_verified = ?, bio = ?, date_of_birth = ?, avatar_url = ?, onboarding_completed = 1, updated_at = ?
@@ -326,7 +362,7 @@ app.post('/api/auth/complete-onboarding', requireAuth, (req: AuthedRequest, res)
     cleanPhone ? 1 : 0,
     String(bio || 'Hey there! I am using RIKZEN CHAT.').trim().slice(0, 220),
     dateOfBirth || null,
-    avatarUrl || null,
+    cleanAvatar,
     now,
     uid
   );
@@ -435,29 +471,67 @@ app.delete('/api/auth/account', requireAuth, (req: AuthedRequest, res) => {
 // ----------------------------------------------------------------------------
 // Media Upload Route
 // ----------------------------------------------------------------------------
-app.post('/api/uploads', requireAuth, upload.single('file'), (req: AuthedRequest, res) => {
-  if (!req.file) {
-    res.status(400).json({ error: 'No file uploaded.' });
+app.post('/api/uploads', requireAuth, (req: AuthedRequest, res) => {
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const msg =
+        err?.code === 'LIMIT_FILE_SIZE'
+          ? 'File exceeds the 50 MB maximum upload limit.'
+          : err?.message || 'Upload rejected.';
+      res.status(400).json({ error: msg });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: 'No file uploaded.' });
+      return;
+    }
+    const bucket = resolveUploadBucket(req.query?.bucket || req.body?.bucket);
+    const storagePath = `${bucket}/${req.file.filename}`;
+    const fileUrl = `/uploads/${storagePath}`;
+    db.prepare(
+      'INSERT INTO attachments (id, uploader_id, file_name, file_url, mime_type, size_bytes, bucket_name, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      req.userId!,
+      req.file.originalname,
+      fileUrl,
+      req.file.mimetype || 'application/octet-stream',
+      req.file.size,
+      bucket,
+      storagePath,
+      new Date().toISOString()
+    );
+    res.status(201).json({
+      fileUrl,
+      fileName: req.file.originalname,
+      mimeType: req.file.mimetype || 'application/octet-stream',
+      sizeBytes: req.file.size,
+      bucket,
+      storagePath,
+    });
+  });
+});
+
+app.delete('/api/uploads', requireAuth, (req: AuthedRequest, res) => {
+  const fileUrl = String(req.body?.fileUrl || req.query?.fileUrl || '').trim();
+  if (!fileUrl.startsWith('/uploads/')) {
+    res.status(400).json({ error: 'Invalid file URL.' });
     return;
   }
-  const fileUrl = `/uploads/${req.file.filename}`;
-  db.prepare(
-    'INSERT INTO attachments (id, uploader_id, file_name, file_url, mime_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(
-    crypto.randomUUID(),
-    req.userId!,
-    req.file.originalname,
-    fileUrl,
-    req.file.mimetype,
-    req.file.size,
-    new Date().toISOString()
-  );
-  res.status(201).json({
-    fileUrl,
-    fileName: req.file.originalname,
-    mimeType: req.file.mimetype,
-    sizeBytes: req.file.size,
-  });
+  const att = db
+    .prepare('SELECT id, storage_path FROM attachments WHERE file_url = ? AND uploader_id = ?')
+    .get(fileUrl, req.userId!) as { id: string; storage_path?: string } | undefined;
+  if (!att) {
+    res.status(404).json({ error: 'Uploaded file record not found.' });
+    return;
+  }
+  const rel = att.storage_path || fileUrl.replace(/^\/uploads\//, '');
+  const fullPath = path.resolve(uploadsDir, rel);
+  if (fullPath.startsWith(uploadsDir) && fs.existsSync(fullPath)) {
+    fs.unlinkSync(fullPath);
+  }
+  db.prepare('DELETE FROM attachments WHERE id = ?').run(att.id);
+  res.json({ ok: true });
 });
 
 app.use('/api', appRouter);
