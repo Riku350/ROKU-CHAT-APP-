@@ -79,9 +79,12 @@ export async function testConnection(): Promise<void> {
 
 const VALID_THEMES = new Set(['dark', 'light', 'system']);
 const VALID_WALLPAPERS = new Set(['obsidian-web', 'midnight', 'emerald-silk', 'champagne-mist']);
+const VALID_ACCENTS = new Set(['gold', 'emerald', 'ivory']);
+const VALID_FONTS = new Set(['small', 'medium', 'large']);
+const VALID_BUBBLES = new Set(['rounded', 'classic', 'minimal']);
 const RIKZEN_ID_RE = /^RIKZEN-[A-Z0-9]{4,12}$/;
 
-function sanitizeAvatarUrl(url: string | null | undefined): string | null {
+export function sanitizeAvatarUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;
   if (url.startsWith('data:') || url.length > 512) return null;
   return url;
@@ -111,6 +114,19 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
   const safeWallpaper = VALID_WALLPAPERS.has(profile.appearanceSettings?.wallpaper)
     ? profile.appearanceSettings.wallpaper
     : 'obsidian-web';
+  const safeAccent = VALID_ACCENTS.has(profile.appearanceSettings?.accentColor)
+    ? profile.appearanceSettings.accentColor
+    : 'gold';
+  const safeFont = VALID_FONTS.has(profile.appearanceSettings?.fontSize)
+    ? profile.appearanceSettings.fontSize
+    : 'medium';
+  const safeBubble = VALID_BUBBLES.has(profile.appearanceSettings?.bubbleStyle)
+    ? profile.appearanceSettings.bubbleStyle
+    : 'rounded';
+  const safeLang = (profile.accessibilitySettings?.appLanguage || 'en').slice(0, 16);
+  const discoverableByName = profile.privacySettings?.discoverableByName ?? true;
+  const discoverableByPhone = profile.privacySettings?.discoverableByPhone ?? false;
+  const readReceipts = profile.privacySettings?.readReceipts ?? true;
 
   const publicRef = doc(db, 'publicProfiles', uid);
   let publicExists = false;
@@ -131,6 +147,7 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         bio: safeBio,
         onboardingCompleted: Boolean(profile.onboardingCompleted),
         isOnline: true,
+        discoverableByName,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -145,6 +162,7 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         bio: safeBio,
         onboardingCompleted: Boolean(profile.onboardingCompleted),
         isOnline: true,
+        discoverableByName,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
@@ -171,6 +189,13 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         dateOfBirth: safeDob,
         theme: safeTheme,
         wallpaper: safeWallpaper,
+        accentColor: safeAccent,
+        fontSize: safeFont,
+        bubbleStyle: safeBubble,
+        appLanguage: safeLang,
+        readReceipts,
+        discoverableByName,
+        discoverableByPhone,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -184,6 +209,13 @@ export async function syncUserToFirestore(profile: UserProfile): Promise<void> {
         dateOfBirth: safeDob,
         theme: safeTheme,
         wallpaper: safeWallpaper,
+        accentColor: safeAccent,
+        fontSize: safeFont,
+        bubbleStyle: safeBubble,
+        appLanguage: safeLang,
+        readReceipts,
+        discoverableByName,
+        discoverableByPhone,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {

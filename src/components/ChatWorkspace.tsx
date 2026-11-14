@@ -34,10 +34,12 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
+import { subscribeDirectMessagesFirestore } from '../lib/firebaseBackend';
 import {
   apiFetch,
   enqueueUnsentMessage,
   getUnsentQueue,
+  isServerlessFirebaseMode,
   realtime,
   removeUnsentMessage,
   uploadMediaFile,
@@ -139,11 +141,22 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       setMessages([]);
       return;
     }
-    loadMessages(activeConversationId);
     setInfoPanelOpen(false);
     setChatSearchOpen(false);
     setChatSearchQuery('');
-  }, [activeConversationId]);
+
+    if (isServerlessFirebaseMode()) {
+      setLoadingMsgs(true);
+      const unsub = subscribeDirectMessagesFirestore(activeConversationId, me.id, (msgs) => {
+        setMessages(msgs);
+        setLoadingMsgs(false);
+        window.setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
+      });
+      return () => unsub();
+    }
+
+    loadMessages(activeConversationId);
+  }, [activeConversationId, me.id]);
 
   // Flush offline queued messages on reconnect
   const flushOfflineQueue = async () => {

@@ -88,6 +88,10 @@
           "type": "boolean",
           "description": "Current presence flag"
         },
+        "discoverableByName": {
+          "type": "boolean",
+          "description": "Controls name search visibility"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -147,6 +151,38 @@
           "type": "string",
           "enum": ["obsidian-web", "midnight", "emerald-silk", "champagne-mist"],
           "description": "Chat wallpaper selection"
+        },
+        "accentColor": {
+          "type": "string",
+          "enum": ["gold", "emerald", "ivory"],
+          "description": "Accent color choice"
+        },
+        "fontSize": {
+          "type": "string",
+          "enum": ["small", "medium", "large"],
+          "description": "Typography scale"
+        },
+        "bubbleStyle": {
+          "type": "string",
+          "enum": ["rounded", "classic", "minimal"],
+          "description": "Chat bubble style"
+        },
+        "appLanguage": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "Preferred app language code"
+        },
+        "readReceipts": {
+          "type": "boolean",
+          "description": "Read receipt preference"
+        },
+        "discoverableByName": {
+          "type": "boolean",
+          "description": "Name discovery preference"
+        },
+        "discoverableByPhone": {
+          "type": "boolean",
+          "description": "Phone discovery preference"
         },
         "createdAt": {
           "type": "string",
@@ -239,6 +275,12 @@
           "pattern": "^[a-zA-Z0-9_\\-]+$",
           "description": "Owner UID who created the conversation"
         },
+        "peerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Optional second user UID for 1-to-1 chats"
+        },
         "lastMessageText": {
           "type": "string",
           "maxLength": 500,
@@ -271,6 +313,13 @@
           "pattern": "^[a-zA-Z0-9_\\-]+$",
           "description": "Member Firebase Auth UID"
         },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent conversation ID"
+        },
         "role": {
           "type": "string",
           "enum": ["owner", "admin", "member"],
@@ -283,7 +332,7 @@
           "description": "Membership creation timestamp"
         }
       },
-      "required": ["uid", "role", "joinedAt"]
+      "required": ["uid", "conversationId", "role", "joinedAt"]
     },
     "ConversationMessage": {
       "title": "ConversationMessage",
@@ -311,6 +360,12 @@
           "pattern": "^[a-zA-Z0-9_\\-]+$",
           "description": "Author Firebase Auth UID"
         },
+        "recipientUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Optional direct peer UID"
+        },
         "content": {
           "type": "string",
           "minLength": 1,
@@ -326,6 +381,10 @@
           "type": "boolean",
           "description": "Soft-delete flag"
         },
+        "isPinned": {
+          "type": "boolean",
+          "description": "Pin flag"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -340,6 +399,116 @@
         }
       },
       "required": ["id", "conversationId", "senderUid", "content", "messageType", "isDeleted", "createdAt", "updatedAt"]
+    },
+    "StatusUpdate": {
+      "title": "StatusUpdate",
+      "description": "24-hour expiring status update",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Status ID"
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Author Firebase Auth UID"
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["text", "image", "video"],
+          "description": "Status media type"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Status text content"
+        },
+        "mediaUrl": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional status media URL"
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Status caption"
+        },
+        "backgroundColor": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Status card background color"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "24-hour expiration timestamp"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        }
+      },
+      "required": ["id", "authorUid", "mediaType", "expiresAt", "createdAt"]
+    },
+    "CallRecord": {
+      "title": "CallRecord",
+      "description": "1-to-1 voice or video call log",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Call ID"
+        },
+        "callerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Caller Firebase Auth UID"
+        },
+        "calleeUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Callee Firebase Auth UID"
+        },
+        "callType": {
+          "type": "string",
+          "enum": ["voice", "video"],
+          "description": "Call type"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ringing", "connected", "ended", "missed", "rejected"],
+          "description": "Call state"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Call start timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Last call update timestamp"
+        }
+      },
+      "required": ["id", "callerUid", "calleeUid", "callType", "status", "startedAt", "updatedAt"]
     },
     "NotificationItem": {
       "title": "NotificationItem",
@@ -384,6 +553,56 @@
         }
       },
       "required": ["id", "recipientUid", "title", "body", "isRead", "createdAt"]
+    },
+    "UserReport": {
+      "title": "UserReport",
+      "description": "Safety and moderation report submitted by a user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Report ID"
+        },
+        "reporterUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Reporter Firebase Auth UID"
+        },
+        "targetType": {
+          "type": "string",
+          "enum": ["user", "message", "group", "channel", "feedback"],
+          "description": "Target category"
+        },
+        "targetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Target identifier"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Report reason or feedback message"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "resolved", "dismissed"],
+          "description": "Moderation state"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "Creation server timestamp"
+        }
+      },
+      "required": ["id", "reporterUid", "targetType", "targetId", "reason", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -419,9 +638,21 @@
       "schema": { "$ref": "#/entities/ConversationMessage" },
       "description": "Conversation messages gated by parent membership subcollection"
     },
+    "/statuses/{statusId}": {
+      "schema": { "$ref": "#/entities/StatusUpdate" },
+      "description": "24-hour status updates"
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/CallRecord" },
+      "description": "Voice and video call records"
+    },
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/NotificationItem" },
       "description": "User-owned notifications"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/UserReport" },
+      "description": "User safety reports and feedback"
     }
   }
 }

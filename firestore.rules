@@ -59,7 +59,7 @@ service cloud.firestore {
 
     function isValidPublicProfile(data) {
       return data.keys().hasAll(['uid', 'rikzenId', 'fullName', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['uid', 'rikzenId', 'fullName', 'avatarUrl', 'bio', 'onboardingCompleted', 'isOnline', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'rikzenId', 'fullName', 'avatarUrl', 'bio', 'onboardingCompleted', 'isOnline', 'discoverableByName', 'createdAt', 'updatedAt']) &&
         isValidId(data.uid) &&
         data.rikzenId is string && data.rikzenId.size() >= 8 && data.rikzenId.size() <= 24 &&
         data.rikzenId.matches('^RIKZEN-[A-Z0-9]{4,12}$') &&
@@ -68,13 +68,19 @@ service cloud.firestore {
         (!('bio' in data) || (data.bio is string && data.bio.size() <= 220)) &&
         data.onboardingCompleted is bool &&
         (!('isOnline' in data) || data.isOnline is bool) &&
+        (!('discoverableByName' in data) || data.discoverableByName is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidPrivateUser(data) {
       return data.keys().hasAll(['uid', 'rikzenId', 'email', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['uid', 'rikzenId', 'email', 'phone', 'dateOfBirth', 'theme', 'wallpaper', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'rikzenId', 'email', 'phone', 'dateOfBirth',
+          'theme', 'wallpaper', 'accentColor', 'fontSize', 'bubbleStyle',
+          'appLanguage', 'readReceipts', 'discoverableByName', 'discoverableByPhone',
+          'createdAt', 'updatedAt'
+        ]) &&
         isValidId(data.uid) &&
         data.rikzenId is string && data.rikzenId.size() >= 8 && data.rikzenId.size() <= 24 &&
         data.rikzenId.matches('^RIKZEN-[A-Z0-9]{4,12}$') &&
@@ -83,6 +89,13 @@ service cloud.firestore {
         (!('dateOfBirth' in data) || data.dateOfBirth == null || (data.dateOfBirth is string && data.dateOfBirth.size() <= 24)) &&
         (!('theme' in data) || (data.theme is string && data.theme in ['dark', 'light', 'system'])) &&
         (!('wallpaper' in data) || (data.wallpaper is string && data.wallpaper in ['obsidian-web', 'midnight', 'emerald-silk', 'champagne-mist'])) &&
+        (!('accentColor' in data) || (data.accentColor is string && data.accentColor in ['gold', 'emerald', 'ivory'])) &&
+        (!('fontSize' in data) || (data.fontSize is string && data.fontSize in ['small', 'medium', 'large'])) &&
+        (!('bubbleStyle' in data) || (data.bubbleStyle is string && data.bubbleStyle in ['rounded', 'classic', 'minimal'])) &&
+        (!('appLanguage' in data) || (data.appLanguage is string && data.appLanguage.size() <= 16)) &&
+        (!('readReceipts' in data) || data.readReceipts is bool) &&
+        (!('discoverableByName' in data) || data.discoverableByName is bool) &&
+        (!('discoverableByPhone' in data) || data.discoverableByPhone is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -101,34 +114,66 @@ service cloud.firestore {
 
     function isValidConversation(data) {
       return data.keys().hasAll(['id', 'type', 'title', 'createdBy', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'type', 'title', 'createdBy', 'lastMessageText', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'type', 'title', 'createdBy', 'peerUid', 'lastMessageText', 'createdAt', 'updatedAt']) &&
         isValidId(data.id) &&
         data.type is string && data.type in ['direct', 'group'] &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
         isValidId(data.createdBy) &&
+        (!('peerUid' in data) || data.peerUid == null || isValidId(data.peerUid)) &&
         (!('lastMessageText' in data) || (data.lastMessageText is string && data.lastMessageText.size() <= 500)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidConversationMember(data) {
-      return data.keys().hasAll(['uid', 'role', 'joinedAt']) &&
-        data.keys().hasOnly(['uid', 'role', 'joinedAt']) &&
+      return data.keys().hasAll(['uid', 'conversationId', 'role', 'joinedAt']) &&
+        data.keys().hasOnly(['uid', 'conversationId', 'role', 'joinedAt']) &&
         isValidId(data.uid) &&
+        isValidId(data.conversationId) &&
         data.role is string && data.role in ['owner', 'admin', 'member'] &&
         data.joinedAt is timestamp;
     }
 
     function isValidConversationMessage(data) {
       return data.keys().hasAll(['id', 'conversationId', 'senderUid', 'content', 'messageType', 'isDeleted', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'conversationId', 'senderUid', 'content', 'messageType', 'isDeleted', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'conversationId', 'senderUid', 'recipientUid', 'content', 'messageType', 'isDeleted', 'isPinned', 'createdAt', 'updatedAt']) &&
         isValidId(data.id) &&
         isValidId(data.conversationId) &&
         isValidId(data.senderUid) &&
+        (!('recipientUid' in data) || data.recipientUid == null || isValidId(data.recipientUid)) &&
         data.content is string && data.content.size() >= 1 && data.content.size() <= 4000 &&
         data.messageType is string && data.messageType in ['text', 'image', 'video', 'document', 'audio', 'voice', 'location', 'system'] &&
         data.isDeleted is bool &&
+        (!('isPinned' in data) || data.isPinned is bool) &&
         data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStatusUpdate(data) {
+      return data.keys().hasAll(['id', 'authorUid', 'mediaType', 'expiresAt', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'authorUid', 'mediaType', 'content', 'mediaUrl', 'caption', 'backgroundColor', 'expiresAt', 'createdAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.authorUid) &&
+        data.mediaType is string && data.mediaType in ['text', 'image', 'video'] &&
+        (!('content' in data) || (data.content is string && data.content.size() <= 1000)) &&
+        (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 512)) &&
+        (!('caption' in data) || (data.caption is string && data.caption.size() <= 300)) &&
+        (!('backgroundColor' in data) || (data.backgroundColor is string && data.backgroundColor.size() <= 32)) &&
+        data.expiresAt is timestamp &&
+        data.createdAt is timestamp &&
+        data.expiresAt > data.createdAt;
+    }
+
+    function isValidCallRecord(data) {
+      return data.keys().hasAll(['id', 'callerUid', 'calleeUid', 'callType', 'status', 'startedAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'callerUid', 'calleeUid', 'callType', 'status', 'startedAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.callerUid) &&
+        isValidId(data.calleeUid) &&
+        data.callerUid != data.calleeUid &&
+        data.callType is string && data.callType in ['voice', 'video'] &&
+        data.status is string && data.status in ['ringing', 'connected', 'ended', 'missed', 'rejected'] &&
+        data.startedAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
@@ -141,6 +186,25 @@ service cloud.firestore {
         data.body is string && data.body.size() >= 1 && data.body.size() <= 500 &&
         data.isRead is bool &&
         data.createdAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['id', 'reporterUid', 'targetType', 'targetId', 'reason', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'reporterUid', 'targetType', 'targetId', 'reason', 'status', 'createdAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.reporterUid) &&
+        data.targetType is string && data.targetType in ['user', 'message', 'group', 'channel', 'feedback'] &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+        data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 1000 &&
+        data.status is string && data.status in ['open', 'resolved', 'dismissed'] &&
+        data.createdAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Group Queries
+    // -------------------------------------------------------------------------
+    match /{path=**}/members/{memberId} {
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
     }
 
     // -------------------------------------------------------------------------
@@ -185,7 +249,7 @@ service cloud.firestore {
             incoming().rikzenId == existing().rikzenId &&
             incoming().createdAt == existing().createdAt &&
             incoming().updatedAt == request.time &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'avatarUrl', 'bio', 'onboardingCompleted', 'isOnline', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'avatarUrl', 'bio', 'onboardingCompleted', 'isOnline', 'discoverableByName', 'updatedAt'])
           )
         );
       allow delete: if isAdmin() && isValidId(userId);
@@ -215,7 +279,11 @@ service cloud.firestore {
             incoming().email == existing().email &&
             incoming().createdAt == existing().createdAt &&
             incoming().updatedAt == request.time &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'dateOfBirth', 'theme', 'wallpaper', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'phone', 'dateOfBirth', 'theme', 'wallpaper',
+              'accentColor', 'fontSize', 'bubbleStyle', 'appLanguage',
+              'readReceipts', 'discoverableByName', 'discoverableByPhone', 'updatedAt'
+            ])
           )
         );
       allow delete: if (isOwner(userId) || isAdmin()) && isValidId(userId);
@@ -257,13 +325,18 @@ service cloud.firestore {
           )
         );
       allow delete: if isValidId(requestId) && isSignedIn() && (
-        existing().senderUid == request.auth.uid || isAdmin()
+        existing().senderUid == request.auth.uid ||
+        existing().receiverUid == request.auth.uid ||
+        isAdmin()
       );
     }
 
     match /conversations/{conversationId} {
       allow get: if isValidId(conversationId) && (isConversationMember(conversationId) || isAdmin());
-      allow list: if isSignedIn() && resource.data.createdBy == request.auth.uid;
+      allow list: if isSignedIn() && (
+        resource.data.createdBy == request.auth.uid ||
+        resource.data.peerUid == request.auth.uid
+      );
       allow create: if isVerified() &&
         isValidId(conversationId) &&
         isValidConversation(incoming()) &&
@@ -297,13 +370,16 @@ service cloud.firestore {
           isValidId(memberId) &&
           isValidConversationMember(incoming()) &&
           incoming().uid == memberId &&
+          incoming().conversationId == conversationId &&
           incoming().joinedAt == request.time &&
           (
             isAdmin() ||
             (incoming().uid == request.auth.uid && incoming().role == 'owner' &&
               getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.createdBy == request.auth.uid) ||
             (exists(/databases/$(database)/documents/conversations/$(conversationId)) &&
-              get(/databases/$(database)/documents/conversations/$(conversationId)).data.createdBy == request.auth.uid)
+              get(/databases/$(database)/documents/conversations/$(conversationId)).data.createdBy == request.auth.uid) ||
+            (existsAfter(/databases/$(database)/documents/conversations/$(conversationId)) &&
+              getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.createdBy == request.auth.uid)
           );
         allow update: if isVerified() &&
           isValidId(conversationId) &&
@@ -312,6 +388,7 @@ service cloud.firestore {
             isAdmin() || (
               get(/databases/$(database)/documents/conversations/$(conversationId)).data.createdBy == request.auth.uid &&
               incoming().uid == existing().uid &&
+              incoming().conversationId == existing().conversationId &&
               incoming().joinedAt == existing().joinedAt &&
               incoming().diff(existing()).affectedKeys().hasOnly(['role'])
             )
@@ -327,7 +404,10 @@ service cloud.firestore {
         allow get: if isValidId(conversationId) && isValidId(messageId) && (
           isConversationMember(conversationId) || isAdmin()
         );
-        allow list: if isSignedIn() && resource.data.senderUid == request.auth.uid;
+        allow list: if isSignedIn() && (
+          resource.data.senderUid == request.auth.uid ||
+          resource.data.recipientUid == request.auth.uid
+        );
         allow create: if isVerified() &&
           isValidId(conversationId) &&
           isValidId(messageId) &&
@@ -353,7 +433,7 @@ service cloud.firestore {
               incoming().messageType == existing().messageType &&
               incoming().createdAt == existing().createdAt &&
               incoming().updatedAt == request.time &&
-              incoming().diff(existing()).affectedKeys().hasOnly(['content', 'isDeleted', 'updatedAt'])
+              incoming().diff(existing()).affectedKeys().hasOnly(['content', 'isDeleted', 'isPinned', 'updatedAt'])
             )
           );
         allow delete: if isValidId(conversationId) && isValidId(messageId) && (
@@ -361,6 +441,57 @@ service cloud.firestore {
           isAdmin()
         );
       }
+    }
+
+    match /statuses/{statusId} {
+      allow get: if isValidId(statusId) && isSignedIn();
+      allow list: if isSignedIn() && resource.data.expiresAt > request.time;
+      allow create: if isVerified() &&
+        isValidId(statusId) &&
+        isValidStatusUpdate(incoming()) &&
+        incoming().id == statusId &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(statusId) && isSignedIn() && (
+        existing().authorUid == request.auth.uid || isAdmin()
+      );
+    }
+
+    match /calls/{callId} {
+      allow get: if isValidId(callId) && isSignedIn() && (
+        existing().callerUid == request.auth.uid ||
+        existing().calleeUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.callerUid == request.auth.uid ||
+        resource.data.calleeUid == request.auth.uid
+      );
+      allow create: if isVerified() &&
+        isValidId(callId) &&
+        isValidCallRecord(incoming()) &&
+        incoming().id == callId &&
+        incoming().callerUid == request.auth.uid &&
+        incoming().status == 'ringing' &&
+        incoming().startedAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() &&
+        isValidId(callId) &&
+        isValidCallRecord(incoming()) && (
+          isAdmin() || (
+            (existing().callerUid == request.auth.uid || existing().calleeUid == request.auth.uid) &&
+            !(existing().status in ['ended', 'missed', 'rejected']) &&
+            incoming().id == existing().id &&
+            incoming().callerUid == existing().callerUid &&
+            incoming().calleeUid == existing().calleeUid &&
+            incoming().callType == existing().callType &&
+            incoming().startedAt == existing().startedAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(callId);
     }
 
     match /notifications/{notificationId} {
@@ -390,6 +521,28 @@ service cloud.firestore {
       allow delete: if isValidId(notificationId) && isSignedIn() && (
         existing().recipientUid == request.auth.uid || isAdmin()
       );
+    }
+
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && isSignedIn() && (
+        existing().reporterUid == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.reporterUid == request.auth.uid ||
+        (request.auth.token.email_verified == true && request.auth.token.email == 'phonedata9955@gmail.com')
+      );
+      allow create: if isVerified() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        incoming().id == reportId &&
+        incoming().reporterUid == request.auth.uid &&
+        incoming().status == 'open' &&
+        incoming().createdAt == request.time;
+      allow update: if isVerified() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        isAdmin();
+      allow delete: if isAdmin() && isValidId(reportId);
     }
   }
 }

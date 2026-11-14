@@ -1,5 +1,13 @@
+import { handleFirebaseApiFallback, uploadFileToFirebaseStorage } from '../lib/firebaseBackend';
+
 const TOKEN_KEY = 'rikzen_auth_token';
 const UNSENT_QUEUE_KEY = 'rikzen_unsent_queue';
+
+let serverlessFirebaseMode = false;
+
+export function isServerlessFirebaseMode(): boolean {
+  return serverlessFirebaseMode;
+}
 
 export function getStoredToken(): string | null {
   try {
@@ -19,6 +27,10 @@ export function setStoredToken(token: string | null): void {
 }
 
 export async function apiFetch<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+  if (serverlessFirebaseMode) {
+    return handleFirebaseApiFallback<T>(path, options);
+  }
+
   const token = getStoredToken();
   const headers = new Headers(options.headers || {});
   if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
@@ -28,11 +40,23 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const res = await fetch(path, {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
+  } catch {
+    serverlessFirebaseMode = true;
+    return handleFirebaseApiFallback<T>(path, options);
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (res.status === 404 || !contentType.includes('application/json')) {
+    serverlessFirebaseMode = true;
+    return handleFirebaseApiFallback<T>(path, options);
+  }
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -50,12 +74,37 @@ export async function uploadMediaFile(file: File | Blob, filename = 'upload.bin'
   mimeType: string;
   sizeBytes: number;
 }> {
+  if (serverlessFirebaseMode) {
+    return uploadFileToFirebaseStorage(file, filename);
+  }
   const form = new FormData();
   form.append('file', file, filename);
-  return apiFetch('/api/uploads', {
-    method: 'POST',
-    body: form,
-  });
+  try {
+    const token = getStoredToken();
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const res = await fetch('/api/uploads', {
+      method: 'POST',
+      body: form,
+      headers,
+      credentials: 'include',
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (res.status === 404 || !contentType.includes('application/json')) {
+      serverlessFirebaseMode = true;
+      return uploadFileToFirebaseStorage(file, filename);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `Upload failed (${res.status})`);
+    }
+    return data;
+  } catch (err) {
+    if (serverlessFirebaseMode) {
+      return uploadFileToFirebaseStorage(file, filename);
+    }
+    throw err;
+  }
 }
 
 export interface QueuedUnsentMessage {
@@ -105,6 +154,9 @@ export class RikzenRealtimeClient {
   private closedManually = false;
 
   connect(): void {
+    if (serverlessFirebaseMode) {
+      return;
+    }
     this.closedManually = false;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
@@ -130,7 +182,7 @@ export class RikzenRealtimeClient {
 
     socket.onclose = () => {
       this.ws = null;
-      if (!this.closedManually) {
+      if (!this.closedManually && !serverlessFirebaseMode) {
         this.reconnectTimer = window.setTimeout(() => this.connect(), 2500);
       }
     };
